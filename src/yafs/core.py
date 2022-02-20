@@ -13,11 +13,14 @@ import copy
 import simpy
 import warnings
 import random
+import datetime
 
 from yafs.topology import Topology
 from yafs.application import Application
 from yafs.metrics import Metrics
 from yafs.distribution import *
+
+from yafs.volatility import Volatility
 
 EVENT_UP_ENTITY = "node_up"
 EVENT_DOWN_ENTITY = "node_down"
@@ -50,7 +53,8 @@ class Sim:
     FORWARD_METRIC = "FWD_M"
     SINK_METRIC = "SINK_M"
     LINK_METRIC = "LINK"
-
+    VOLATILITY_METRIC = "VOL_M"
+    
     def __init__(self, topology, name_register='events_log.json', link_register='links_log.json', redis=None, purge_register=True, logger=None, default_results_path=None):
 
         self.env = simpy.Environment()
@@ -67,6 +71,9 @@ class Sim:
         self.network_ctrl_pipe = simpy.Store(self.env)
         self.network_pump = 0
         # a shared resource that control the exchange of messagess in the topology
+
+        self.volatility = {}
+        # The volatility for each app
 
         self.stop = False
         """
@@ -110,6 +117,7 @@ class Sim:
         # key: id.source.process
         # value: Boolean
 
+        
         self.des_control_process = {}
         # key: app.name
         # value: des process
@@ -229,8 +237,8 @@ class Sim:
             # print "DST_INT:",message.dst_int
             # #print message.timestamp
             # print "DST",message.dst
-
-
+            #print(f'network_process, {self.env.now} - {message.timestamp}, name: {message.name}, idDES: {message.idDES}, path: {message.path}, dst_int: {message.dst_int}, src: {message.src}, dst: {message.dst}')
+            
             # If same SRC and PATH or the message has achieved the penultimate node to reach the dst
             if not message.path or message.path[-1] == message.dst_int or len(message.path)==1:
 
@@ -239,6 +247,8 @@ class Sim:
                 message.timestamp_rec = self.env.now
                 # The message is sent to the module.pipe
                 self.consumer_pipes[pipe_id].put(message)
+                # Calculate and log volatility for recipient
+                self.__volatility_function(message, Volatility.SINK, message.dst)
             else:
                 # The message is sent at first time or it sent more times.
                 # if message.dst_int < 0:
@@ -247,9 +257,14 @@ class Sim:
                         (isinstance(message.dst_int , int) and message.dst_int  < 0):
                     src_int = message.path[0]
                     message.dst_int = message.path[1]
+                    vtype = Volatility.SOURCE
                 else:
                     src_int = message.dst_int
                     message.dst_int = message.path[message.path.index(message.dst_int) + 1]
+                    vtype = Volatility.PROXY
+
+                # Calcultate volatility
+                self.__volatility_function(message, vtype, src_int)
                 # arista set by (src_int,message.dst_int)
                 link = (src_int, message.dst_int)
 
@@ -312,6 +327,33 @@ class Sim:
                         # print "\t",msg.path
                         self.network_ctrl_pipe.put(message)
 
+
+
+    def __volatility_function(self, message, vtype, node):
+        if Volatility.SINK == vtype:
+            data_cr = datetime.timedelta(seconds=message.timestamp_rec)
+        else:
+            data_cr = datetime.timedelta(seconds=self.env.now)
+
+        delta_unlink = self.volatility[message.app_name].get_unlinktime(message, vtype)
+        delta_erase = self.volatility[message.app_name].get_erasetime(message, vtype)
+        if Volatility.SOURCE == vtype:
+            # Assume unlink happens when message is sent from source.
+            # TODO: create a better fraemework for the source node
+            data_cr -= delta_unlink
+
+        self.metrics.insert_volatility({'id':message.id, 'type':self.VOLATILITY_METRIC,
+                                        'src':message.path[0],
+                                        'dst':message.path[-1],
+                                        'node':node,
+                                        'app':message.app_name,
+                                        'message':message.name,
+                                        'time_created':data_cr,
+                                        'delta_unlink':delta_unlink,
+                                        'delta_erase':delta_erase,
+                                        'vtype':vtype,
+                                        'time_unlink':data_cr+delta_unlink,
+                                        'time_erase':data_cr+delta_unlink+delta_erase})
 
 
     def __wait_message(self, msg, latency, shift_time):
@@ -918,6 +960,30 @@ class Sim:
         # Add Selection control to the App
         self.selector_path[app.name] = selector
 
+
+    def deploy_app_vol(self, app, placement, selector, volatility):
+        """
+        This process is the same as deploy_app, with the addition of volatility
+        """
+        # Application
+        self.apps[app.name] = app
+
+        # Initialization
+        self.alloc_module[app.name] = {}
+
+        # Add Placement controls to the App
+        if not placement.name in self.placement_policy.keys(): # First time
+            self.placement_policy[placement.name] = {"placement_policy": placement, "apps": []}
+            if placement.activation_dist is not None:
+                self.env.process(self.__add_placement_process(placement))
+        self.placement_policy[placement.name]["apps"].append(app.name)
+
+        # Add Selection control to the App
+        self.selector_path[app.name] = selector
+
+        # Add Volatilityto the App
+        self.volatility[app.name] = volatility
+        
     def deploy_app2(self, app, placement, population, selector):
         warnings.warn("deprecated", DeprecationWarning)
     
