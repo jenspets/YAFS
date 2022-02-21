@@ -248,7 +248,7 @@ class Sim:
                 # The message is sent to the module.pipe
                 self.consumer_pipes[pipe_id].put(message)
                 # Calculate and log volatility for recipient
-                self.__volatility_function(message, Volatility.SINK, message.dst)
+                self.__volatility_function(message, Volatility.SINK, message.dst_int)
             else:
                 # The message is sent at first time or it sent more times.
                 # if message.dst_int < 0:
