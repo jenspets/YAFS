@@ -8,7 +8,7 @@ import time
 import json
 import random
 import logging.config
-from datetime import timedelta
+#from datetime import timedelta
 
 import networkx as nx
 from pathlib import Path
@@ -81,7 +81,8 @@ def main(stop_time, it):
     Volatility
     """
     vol = FixedVolatility(dataApp)
-    vtime = timedelta(minutes=1)
+    #vtime = timedelta(minutes=1)
+    vtime = 68 # seconds
     vol.set_unlinkdistr(vtime)
     vol.set_erasedistr(vtime)
     

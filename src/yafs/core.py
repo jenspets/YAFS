@@ -13,7 +13,6 @@ import copy
 import simpy
 import warnings
 import random
-import datetime
 
 from yafs.topology import Topology
 from yafs.application import Application
@@ -331,9 +330,11 @@ class Sim:
 
     def __volatility_function(self, message, vtype, node):
         if Volatility.SINK == vtype:
-            data_cr = datetime.timedelta(seconds=message.timestamp_rec)
+            #data_cr = datetime.timedelta(seconds=message.timestamp_rec)
+            data_cr = message.timestamp_rec
         else:
-            data_cr = datetime.timedelta(seconds=self.env.now)
+            #data_cr = datetime.timedelta(seconds=self.env.now)
+            data_cr = self.env.now
 
         delta_unlink = self.volatility[message.app_name].get_unlinktime(message, vtype)
         delta_erase = self.volatility[message.app_name].get_erasetime(message, vtype)
