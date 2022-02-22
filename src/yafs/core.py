@@ -336,8 +336,8 @@ class Sim:
             #data_cr = datetime.timedelta(seconds=self.env.now)
             data_cr = self.env.now
 
-        delta_unlink = self.volatility[message.app_name].get_unlinktime(message, vtype)
-        delta_erase = self.volatility[message.app_name].get_erasetime(message, vtype)
+        delta_unlink = self.volatility[message.app_name].get_unlinktime(message, vtype=vtype)
+        delta_erase = self.volatility[message.app_name].get_erasetime(message, vtype=vtype)
         if Volatility.SOURCE == vtype:
             # Assume unlink happens when message is sent from source.
             # TODO: create a better fraemework for the source node

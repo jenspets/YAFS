@@ -22,7 +22,7 @@ from yafs.placement import JSONPlacement
 from yafs.path_routing import DeviceSpeedAwareRouting
 from yafs.distribution import deterministic_distribution
 
-from yafs.volatility import FixedVolatility
+from yafs.volatility import Volatility, FixedVolatility, UniformVolatility
 
 
 def main(stop_time, it):
@@ -77,14 +77,24 @@ def main(stop_time, it):
     Defining ROUTING algorithm to define how path messages in the topology among modules
     """
     selectorPath = DeviceSpeedAwareRouting()
+
     """
     Volatility
     """
-    vol = FixedVolatility(dataApp)
-    #vtime = timedelta(minutes=1)
-    vtime = 68 # seconds
-    vol.set_unlinkdistr(vtime)
-    vol.set_erasedistr(vtime)
+    #vol = FixedVolatility(dataApp)
+    #vtime = 68 # seconds
+    #vol.set_unlinkdistr(vtime)
+    #vol.set_erasedistr(vtime)
+
+    vol = UniformVolatility(dataApp)
+    vol.set_erasedistr(10, 100, vtype=Volatility.SOURCE)
+    vol.set_erasedistr(1, 20, vtype=Volatility.PROXY)
+    vol.set_erasedistr(40, 300, vtype=Volatility.SINK)
+    vol.set_unlinkdistr(1, 30, vtype=Volatility.SOURCE)
+    vol.set_unlinkdistr(5, 20, vtype=Volatility.PROXY)
+    vol.set_unlinkdistr(30, 400, vtype=Volatility.SINK)
+    
+    
     
     """
     SIMULATION ENGINE
