@@ -94,8 +94,6 @@ def main(stop_time, it):
     vol.set_unlinkdistr(5, 20, vtype=Volatility.PROXY)
     vol.set_unlinkdistr(30, 400, vtype=Volatility.SINK)
     
-    
-    
     """
     SIMULATION ENGINE
     """
