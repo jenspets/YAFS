@@ -329,6 +329,10 @@ class Sim:
 
 
     def __volatility_function(self, message, vtype, node):
+        if message.app_name not in self.volatility:
+            # If app_name has not been set with volatility, nothing to do
+            return
+        
         if Volatility.SINK == vtype:
             #data_cr = datetime.timedelta(seconds=message.timestamp_rec)
             data_cr = message.timestamp_rec
