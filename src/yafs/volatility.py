@@ -36,15 +36,15 @@ class Volatility(object):
 
 
 class UniformVolatility(Volatility):
-    """ Volatility drawn from a uniform distribution, set by each type of node. """
+    """ Volatility drawn from a uniform distribution, set by each type of node."""
     
     def __init__(self, app, logger=None):
-        self.dname = 'default_vol' # Name for default dictionary item if no message name is given 
-        self.etime_node = {self.dname:{}}
-        self.etime_type = {self.dname:{}}
+        self.dname = 'default_vol'  # Name for default dictionary item if no message name is given
+        self.etime_node = {self.dname: {}}
+        self.etime_type = {self.dname: {}}
         self.etime = {self.dname: (0, 0)}
-        self.utime_node = {self.dname:{}}
-        self.utime_type = {self.dname:{}}
+        self.utime_node = {self.dname: {}}
+        self.utime_type = {self.dname: {}}
         self.utime = {self.dname: (0, 0)}
         super().__init__(app, logger)
 
@@ -56,7 +56,7 @@ class UniformVolatility(Volatility):
         if node:
             # Set the volatility for a specific node
             if message_name:
-                if not message_name in self.etime_node:
+                if message_name not in self.etime_node:
                     self.etime_node[message_name] = {}
                 self.etime_node[message_name][node] = (tmin, tmax)
             else:
