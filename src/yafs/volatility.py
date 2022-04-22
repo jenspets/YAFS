@@ -4,6 +4,7 @@ This class is for setting the volatility of each node in the network.
 
 import logging
 import random
+import networkx as nx
 
 class Volatility(object):
     # just choose some random starting point for these constants
@@ -35,16 +36,17 @@ class Volatility(object):
         return 1.0
 
 
-class ExponentialVolatilty(Volatility):
-    """ A class where the volatility with an Negative exponential distirbution. Parameter to the distribution is lambds. """
-    def __init__(self, app, logger=None):
+class ExponentialVolatility(Volatility):
+    """ A class where the volatility with an Negative exponential distribution. Parameter to the distribution is lambds. """
+    def __init__(self, app, topology, logger=None):
         self.dname = 'default_vol'  # Name for default dictionary item if no message name is given
-        self.etime_node = {self.dname: {}}
         self.etime_type = {self.dname: {}}
+        self.etime_node = {self.dname: {}}
         self.etime = {self.dname: 0}
-        self.utime_node = {self.dname: {}}
         self.utime_type = {self.dname: {}}
+        self.utime_node = {self.dname: {}}
         self.utime = {self.dname: 0}
+        self.t = topology
         super().__init__(app, logger)
 
     def set_unlinkdistr(self, lmbd, message_name=None, vtype=None, node=None):
@@ -91,7 +93,7 @@ class ExponentialVolatilty(Volatility):
             else:
                 self.etime[self.dname] = lmbd
 
-    def get_unlinktime(self, message, vtype=None, node=None):
+    def get_unlinktime(self, message, node=None, vtype=None):
         m = message.name
         lmbd = 0
 
@@ -110,25 +112,34 @@ class ExponentialVolatilty(Volatility):
 
         return random.expovariate(lmbd)
 
-    def get_erasetime(self, message, vtype=None, node=None):
+    def get_erasetime(self, message, node, vtype=None):
+        
         m = message.name
         lmbd = 0
 
+        # Modify lambda based or MEM 
+        # Scaling function selected to scale retention time down for resource constrained nodes
+        # scaling factor selected to be .1 to 1
+        hi = 1
+        lo = .1
+        print(f'node: {node}')
+        mmax = max(nx.get_node_attributes(self.t.G, 'MEM').values())
+        scale = lo + (hi - lo) * (nx.get_node_attributes(self.t.G, 'MEM')[node] / mmax)
+
         if node and m in self.etime_node and node in self.etime_node[m]:
-            lmbd = self.etime_node[m][node]
+            lmbd = self.etime_node[m][node] / scale
         elif vtype and m in self.etime_type and vtype in self.etime_type[m]:
-            lmbd = self.etime_type[m][vtype]
+            lmbd = self.etime_type[m][vtype] / scale
         elif node and node in self.etime_node[self.dname]:
-            lmbd = self.etime_node[self.dname][node]
+            lmbd = self.etime_node[self.dname][node] / scale
         elif vtype and vtype in self.etime_type[self.dname]:
-            lmbd = self.etime_type[self.dname][vtype]
+            lmbd = self.etime_type[self.dname][vtype] / scale
         elif m in self.etime:
-            lmbd = self.etime[m]
+            lmbd = self.etime[m] / scale
         else:
-            lmbd = self.etime[self.dname]
-
+            lmbd = self.etime[self.dname] / scale
+        # print(f'Node: {node}, scale: {scale}, lambda: {lmbd}, MEM: {nx.get_node_attributes(self.t.G, "MEM")[node]}')
         return random.expovariate(lmbd)
-
 
 
 class UniformVolatility(Volatility):

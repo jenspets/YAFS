@@ -247,7 +247,12 @@ class Sim:
                 # The message is sent to the module.pipe
                 self.consumer_pipes[pipe_id].put(message)
                 # Calculate and log volatility for recipient
-                self.__volatility_function(message, Volatility.SINK, message.dst_int)
+                # print(f'Sink node: {message.dst_int}, {message.name}, {message.id}, {message.path}')
+                if len(message.path) == 1:
+                    # Source and destination is the same, use path[0] as dst_int has not been set
+                    self.__volatility_function(message, Volatility.SINK, message.path[0])
+                else:
+                    self.__volatility_function(message, Volatility.SINK, message.dst_int)
             else:
                 # The message is sent at first time or it sent more times.
                 # if message.dst_int < 0:
@@ -262,7 +267,8 @@ class Sim:
                     message.dst_int = message.path[message.path.index(message.dst_int) + 1]
                     vtype = Volatility.PROXY
 
-                # Calcultate volatility
+                # Calculate volatility
+                # print(f'{vtype} node: {src_int}, {message.name}, {message.id}, {message.path}')
                 self.__volatility_function(message, vtype, src_int)
                 # arista set by (src_int,message.dst_int)
                 link = (src_int, message.dst_int)
@@ -341,7 +347,7 @@ class Sim:
             data_cr = self.env.now
 
         delta_unlink = self.volatility[message.app_name].get_unlinktime(message, vtype=vtype)
-        delta_erase = self.volatility[message.app_name].get_erasetime(message, vtype=vtype)
+        delta_erase = self.volatility[message.app_name].get_erasetime(message, node, vtype=vtype)
         if Volatility.SOURCE == vtype:
             # Assume unlink happens when message is sent from source.
             # TODO: create a better fraemework for the source node
