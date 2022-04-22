@@ -122,7 +122,7 @@ class ExponentialVolatility(Volatility):
         # scaling factor selected to be .1 to 1
         hi = 1
         lo = .1
-        print(f'node: {node}')
+        
         mmax = max(nx.get_node_attributes(self.t.G, 'MEM').values())
         scale = lo + (hi - lo) * (nx.get_node_attributes(self.t.G, 'MEM')[node] / mmax)
 
