@@ -35,6 +35,102 @@ class Volatility(object):
         return 1.0
 
 
+class ExponentialVolatilty(Volatility):
+    """ A class where the volatility with an Negative exponential distirbution. Parameter to the distribution is lambds. """
+    def __init__(self, app, logger=None):
+        self.dname = 'default_vol'  # Name for default dictionary item if no message name is given
+        self.etime_node = {self.dname: {}}
+        self.etime_type = {self.dname: {}}
+        self.etime = {self.dname: 0}
+        self.utime_node = {self.dname: {}}
+        self.utime_type = {self.dname: {}}
+        self.utime = {self.dname: 0}
+        super().__init__(app, logger)
+
+    def set_unlinkdistr(self, lmbd, message_name=None, vtype=None, node=None):
+        if node:
+            # Set the volatility for a specific node
+            if message_name:
+                if message_name not in self.utime_node:
+                    self.utime_node[message_name] = {}
+                self.utime_node[message_name][node] = lmbd
+            else:
+                self.utime_node[self.dname][node] = lmbd
+        elif vtype:
+            if message_name:
+                if message_name not in self.utime_type:
+                    self.utime_type[message_name] = {}
+                self.utime_type[message_name][vtype] = lmbd
+            else:
+                self.utime_type[self.dname][vtype] = lmbd
+        else:
+            if message_name:
+                self.utime[message_name] = lmbd
+            else:
+                self.utime[self.dname] = lmbd
+
+    def set_erasedistr(self, lmbd, message_name=None, vtype=None, node=None):
+        if node:
+            # Set the volatility for a specific node
+            if message_name:
+                if message_name not in self.etime_node:
+                    self.etime_node[message_name] = {}
+                self.etime_node[message_name][node] = lmbd
+            else:
+                self.etime_node[self.dname][node] = lmbd
+        elif vtype:
+            if message_name:
+                if message_name not in self.etime_type:
+                    self.etime_type[message_name] = {}
+                self.etime_type[message_name][vtype] = lmbd
+            else:
+                self.etime_type[self.dname][vtype] = lmbd
+        else:
+            if message_name:
+                self.etime[message_name] = lmbd
+            else:
+                self.etime[self.dname] = lmbd
+
+    def get_unlinktime(self, message, vtype=None, node=None):
+        m = message.name
+        lmbd = 0
+
+        if node and m in self.utime_node and node in self.utime_node[m]:
+            lmbd = self.utime[m][node]
+        elif vtype and m in self.utime_type and vtype in self.utime_type[m][vtype]:
+            lmbd = self.utime_type[m][vtype]
+        elif node and node in self.utime_node[self.dname]:
+            lmbd = self.utime_node[self.dname][node]
+        elif vtype and vtype in self.utime_type[self.dname]:
+            lmbd = self.utime_type[self.dname][vtype]
+        elif m in self.utime:
+            lmbd = self.utime[m]
+        else:
+            lmbd = self.utime[self.dname]
+
+        return random.expovariate(lmbd)
+
+    def get_erasetime(self, message, vtype=None, node=None):
+        m = message.name
+        lmbd = 0
+
+        if node and m in self.etime_node and node in self.etime_node[m]:
+            lmbd = self.etime_node[m][node]
+        elif vtype and m in self.etime_type and vtype in self.etime_type[m]:
+            lmbd = self.etime_type[m][vtype]
+        elif node and node in self.etime_node[self.dname]:
+            lmbd = self.etime_node[self.dname][node]
+        elif vtype and vtype in self.etime_type[self.dname]:
+            lmbd = self.etime_type[self.dname][vtype]
+        elif m in self.etime:
+            lmbd = self.etime[m]
+        else:
+            lmbd = self.etime[self.dname]
+
+        return random.expovariate(lmbd)
+
+
+
 class UniformVolatility(Volatility):
     """ Volatility drawn from a uniform distribution, set by each type of node."""
     
