@@ -14,7 +14,7 @@ from yafs.application import create_applications_from_json
 from yafs.topology import Topology
 from yafs.placement import Placement
 from yafs.path_routing import DeviceSpeedAwareRouting
-from yafs.volatility import Volatility, UniformVolatility
+from yafs.volatility import Volatility, ExponentialVolatility
 from yafs.distribution import deterministic_distribution
 
 class FogPlacement(Placement):
@@ -55,6 +55,24 @@ def deploy_sources(sim):
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
 
 
+def get_eraselimits_gcbased(mem, writing_rate=120, scale=10):
+    ''' Calculate erase time volatility limits for a uniform distribution from the MeM size and the writing rate (s/w).
+    This should also take into account the dynamic load of the node, as much writing faster will overwrite obsolete data.
+    For now, assume a static load on the nodes, set individually. I don't think YAFS records the load in each node.
+    The derivative should be decreasing with higher number, but not be negative or zero.
+    '''
+
+    nmin = .5  # Min/max number of remaining sectors after a GC, based loosely on Contiki volatility paper
+
+    # tmax = writing_rate * mem * scale
+
+    mean = (mem * scale) / writing_rate
+    tmax = random.gauss(mean, mean/10)
+    tmin = nmin*tmax
+    
+    return (tmin, tmax)
+
+
 def main(stop_time, it, folder_results):
     # Topology
     t = Topology()
@@ -86,20 +104,22 @@ def main(stop_time, it, folder_results):
     routing = DeviceSpeedAwareRouting()
 
     # Volatility
-    volatility = UniformVolatility(japp)
-    volatility.set_erasedistr(10, 100, vtype=Volatility.SOURCE)
-    volatility.set_erasedistr(1, 20, vtype=Volatility.PROXY)
-    volatility.set_erasedistr(50, 300, vtype=Volatility.SINK)
-    volatility.set_unlinkdistr(1, 30, vtype=Volatility.SOURCE)
-    volatility.set_unlinkdistr(5, 20, vtype=Volatility.PROXY)
-    volatility.set_unlinkdistr(30, 400, vtype=volatility.SINK)
+    volatility = {}
+    for a in apps:
+        volatility[a] = ExponentialVolatility(a, t)
+        volatility[a].set_erasedistr(1/60, vtype=Volatility.SOURCE)
+        volatility[a].set_erasedistr(1/10, vtype=Volatility.PROXY)
+        volatility[a].set_erasedistr(1/600, vtype=Volatility.SINK)
+        volatility[a].set_unlinkdistr(1/300, vtype=Volatility.SOURCE)
+        volatility[a].set_unlinkdistr(1/300, vtype=Volatility.PROXY)
+        volatility[a].set_unlinkdistr(1/300, vtype=Volatility.SINK)
     
     # Simulation
     s = Sim(t, default_results_path=folder_results+'sim_trace')
 
     # Deploy services
     for a in apps:
-        s.deploy_app_vol(apps[a], placement, routing, volatility)
+        s.deploy_app_vol(apps[a], placement, routing, volatility[a])
 
     # Deploy sources
     deploy_sources(s)
