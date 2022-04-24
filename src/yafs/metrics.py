@@ -16,7 +16,7 @@ class Metrics:
         columns_event = ["id","type", "app", "module", "message","DES.src","DES.dst","TOPO.src","TOPO.dst","module.src","service", "time_in","time_out",
                          "time_emit","time_reception"]
         columns_link = ["id","type", "src", "dst", "app", "latency", "message", "ctime", "size","buffer"]
-        columns_volatility = ["id","type", "src", "dst", "node", "app", "message", "time_created", "time_unlink", "time_erase", "delta_unlink", "delta_erase", "vtype"]
+        columns_volatility = ["id","type", "src", "dst", "node", "app", "message", "mem", "time_created", "time_unlink", "time_erase", "delta_unlink", "delta_erase", "vtype"]
 
         path = "result"
         if  default_results_path is not None:
@@ -74,6 +74,7 @@ class Metrics:
                                 value["node"],
                                 value['app'],
                                 value['message'],
+                                value['mem'],
                                 value['time_created'],
                                 value['time_unlink'],
                                 value['time_erase'],

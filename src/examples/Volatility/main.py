@@ -16,6 +16,7 @@ from yafs.placement import Placement
 from yafs.path_routing import DeviceSpeedAwareRouting
 from yafs.volatility import Volatility, ExponentialVolatility
 from yafs.distribution import deterministic_distribution
+from yafs.stats import Stats
 
 class FogPlacement(Placement):
     ''' 
@@ -127,8 +128,12 @@ def main(stop_time, it, folder_results):
     # Run simulation
     logging.info(f' Performing simulation {it}')
     s.run(stop_time)
-    s.print_debug_assignaments()
-    
+    # s.print_debug_assignaments()
+
+    stats = Stats(defaultPath=folder_results+'sim_trace')
+    stats.showVolatility(stop_time, t)
+
+
 if "__main__" == __name__:
     sim_duration = 600
     iterations = 1
@@ -142,7 +147,7 @@ if "__main__" == __name__:
     
     for i in range(iterations):
         tstart = time.time()
-        main(sim_duration, i, folder_results) 
+        main(sim_duration, i, folder_results)
         print(f'\n--- Iteration: {i}: {time.time() - tstart} seconds ---')
 
     print('simulation finished')

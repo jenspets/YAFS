@@ -13,6 +13,7 @@ import copy
 import simpy
 import warnings
 import random
+import networkx as nx
 
 from yafs.topology import Topology
 from yafs.application import Application
@@ -359,6 +360,7 @@ class Sim:
                                         'node':node,
                                         'app':message.app_name,
                                         'message':message.name,
+                                        'mem': nx.get_node_attributes( self.topology.G, 'MEM')[node],
                                         'time_created':data_cr,
                                         'delta_unlink':delta_unlink,
                                         'delta_erase':delta_erase,

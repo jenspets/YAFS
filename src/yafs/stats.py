@@ -9,7 +9,7 @@ class Stats:
     def __init__(self,defaultPath="result"):
         self.df_link = pd.read_csv(defaultPath + "_link.csv")
         self.df = pd.read_csv(defaultPath + ".csv")
-
+        self.df_vol = pd.read_csv(defaultPath + "_volatility.csv")
 
     def bytes_transmitted(self):
         return self.df_link["size"].sum()
@@ -107,7 +107,17 @@ class Stats:
         return results
 
 
+    def showVolatility(self, total_time, topology):
+        print(f'\tSimulation time: {total_time:.2f}')
+        vols = self.df_vol.groupby('vtype')
+        print(vols.agg({'mem': 'describe', 'delta_unlink': 'describe', 'delta_erase': 'describe'}))
 
+        for v in vols:
+            print(v[0])
+            print(v[1].agg({"mem": "describe"}))
+            print(v[1].agg({"delta_unlink": "describe"}))
+            print(v[1].agg({"delta_erase": "describe"}))
+            #print(v[1][['mem', 'delta_unlink', 'delta_erase']])
 
     def showResults(self, total_time, topology, time_loops=None):
         print ("\tSimulation Time: %0.2f" % total_time)
