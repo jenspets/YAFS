@@ -109,15 +109,18 @@ class Stats:
 
     def showVolatility(self, total_time, topology):
         print(f'\tSimulation time: {total_time:.2f}')
-        vols = self.df_vol.groupby('vtype')
-        print(vols.agg({'mem': 'describe', 'delta_unlink': 'describe', 'delta_erase': 'describe'}))
+        if self.df_vol.size != 0:
+            vols = self.df_vol.groupby('vtype')
+            print(vols.agg({'mem': 'describe', 'delta_unlink': 'describe', 'delta_erase': 'describe'}))
 
-        for v in vols:
-            print(v[0])
-            print(v[1].agg({"mem": "describe"}))
-            print(v[1].agg({"delta_unlink": "describe"}))
-            print(v[1].agg({"delta_erase": "describe"}))
-            #print(v[1][['mem', 'delta_unlink', 'delta_erase']])
+            for v in vols:
+                print(v[0])
+                print(v[1].agg({"mem": "describe"}))
+                print(v[1].agg({"delta_unlink": "describe"}))
+                print(v[1].agg({"delta_erase": "describe"}))
+                #print(v[1][['mem', 'delta_unlink', 'delta_erase']])
+        else:
+            print('No volatility data to show')
 
     def showResults(self, total_time, topology, time_loops=None):
         print ("\tSimulation Time: %0.2f" % total_time)
