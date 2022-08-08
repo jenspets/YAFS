@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import pprint
 import argparse
 import itertools
+import scipy.stats as spstats
 
 from yafs.core import Sim
 from yafs.application import create_applications_from_json
@@ -23,6 +24,22 @@ from yafs.stats import Stats
 DEFAULT_SIZE = 100   # Default number of nodes in the network
 NSOURCES     = .1    # Percentage of nodes that will act as message sources
 PSERVER      = .2    # Percentage of ellegible nodes that are selected as a server
+MINMEM       = 1E3   # Minimum memory for a fog server, in MB
+PR_gv_alpha  = 1     # Propagation delay, gammavariate settings
+PR_gv_beta   = .2    # Propagation delay, gammavariate settings
+BW_gv_alpha  = 1.5   # Bandwidth, gammavariate settings
+BW_gv_beta   = 1     # Bandwidth, gammavariate settings
+PRC_gv_alpha = PR_gv_alpha * 10  # A high propagation time for cloud nodes
+PRC_gv_beta  = PR_gv_beta * 4
+BWC_gv_alpha = BW_gv_alpha  # Bandwidht is the same as sother nodes. 
+BWC_gv_beta  = BW_gv_beta
+IPT_g_mu     = 1000  # Instructions per Time gauss settings
+IPT_g_sigma  = 200   # Instructions per Time gauss settings
+MEM_ev_lambd = 1E-4  # Memory exponential distribution setting
+SIM_DURATION = 600   # Time to run simulation
+SIM_ITERS    = 1     # Number of iterations
+P_SIBLING    = .5    # Probability for creating a link between siblings in a tree
+NCOLONIES    = 10    # Default number of fog colonies
 
 class FogRandomStaticPlacement(Placement):
     '''
@@ -34,7 +51,7 @@ class FogRandomStaticPlacement(Placement):
         services = app.services
         pserver = PSERVER
         pots = []
-        minmem = 1E3    # Min 1 GB MEM
+        minmem = MINMEM    # Min 1 GB MEM
 
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
@@ -50,12 +67,11 @@ class FogTreeSiblingConnectionPlacement(Placement):
     The class generate a tree structure from the network, with connections between siblings. 
     The service is placed in all nodes that have minimum requirements, and that is not a leaf node
     '''
-    original_G = None
     
     def initial_allocation(self, sim, app_name):
         app = sim.apps[app_name]
         services = app.services
-        minmem = 1E3
+        minmem = MINMEM
         pserver = PSERVER
         serverlist = []
 
@@ -68,20 +84,54 @@ class FogTreeSiblingConnectionPlacement(Placement):
         for module in services.keys():
             idDES = sim.deploy_module(app_name, module, services[module], serverlist)
 
+class FogColonyPlacement(Placement):
+    '''
+    The class places servers in some of the nodes in some clusters, simulating busy nodes whithin a cluster.
+    In clusters with no modules, it simulates a cluster where no nodes can process the request.
+    It will not place a service in the orchestration node.
+    '''
+    def initial_allocation(self, sim, app_name):
+        app = sim.apps[app_name]
+        services = app.services
+        minmem = MINMEM
+        pserver = PSERVER
+        serverlist = []
+
+        for n in sim.topology.G.nodes():
+            mem = sim.topology.G.nodes()[n]['MEM']
+            controller = sim.topology.G.nodes()[n]['CONTROLLER']
+            if n != controller and mem > minmem and random.random() <= pserver:
+                serverlist.append(n)
+
+        for module in services.keys():
+            idDES = sim.deploy_module(app_name, module, services[module], serverlist)
+
 
 def deploy_random_lowresource_sources(sim):
     '''
     Deploy a number of sources, at the most memory constrained nodes, each with a message sending distribution. 
     '''
     nsources = int(nx.number_of_nodes(sim.topology.G) * NSOURCES)
-    # nsources = 10
-
+    
     # make a list of sources, select the nsources with lowest MEM
     psources = [x for x in sorted(sim.topology.G.nodes(), key=lambda x: sim.topology.G.nodes()[x]['MEM'])][:nsources]
 
     for a in sim.apps:
         for i in psources:
             # Select a random message from app
+            msg = sim.apps[a].get_message(random.sample(sorted(sim.apps[a].messages), 1)[0])
+            dist = deterministic_distribution(100, name='Deterministic')
+            idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
+
+def deploy_colony_sources(sim):
+    '''
+    Deploy source in the service orchestration nodes, simulating a gateway or node contacting this node directly.
+    '''
+    nsources = int(nx.number_of_nodes(sim.topology.G) * NSOURCES)
+    psources = [x for x in sorted(sim.topology.G.nodes(), key=lambda x: sim.topology.G.nodes()[x]['MEM']) if sim.topology.G.nodes()[x]['CONTROLLER'] == x][:nsources]
+
+    for a in sim.apps:
+        for n in psources:
             msg = sim.apps[a].get_message(random.sample(sorted(sim.apps[a].messages), 1)[0])
             dist = deterministic_distribution(100, name='Deterministic')
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
@@ -113,22 +163,22 @@ def deploy_leaf_nodes_sources(sim):
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
 
 
-def get_eraselimits_gcbased(mem, writing_rate=120, scale=10):
-    ''' Calculate erase time volatility limits for a uniform distribution from the MeM size and the writing rate (s/w).
-    This should also take into account the dynamic load of the node, as much writing faster will overwrite obsolete data.
-    For now, assume a static load on the nodes, set individually. I don't think YAFS records the load in each node.
-    The derivative should be decreasing with higher number, but not be negative or zero.
-    '''
+# def get_eraselimits_gcbased(mem, writing_rate=120, scale=10):
+#     ''' Calculate erase time volatility limits for a uniform distribution from the MeM size and the writing rate (s/w).
+#     This should also take into account the dynamic load of the node, as much writing faster will overwrite obsolete data.
+#     For now, assume a static load on the nodes, set individually. I don't think YAFS records the load in each node.
+#     The derivative should be decreasing with higher number, but not be negative or zero.
+#     '''
 
-    nmin = .5  # Min/max number of remaining sectors after a GC, based loosely on Contiki volatility paper
+#     nmin = .5  # Min/max number of remaining sectors after a GC, based loosely on Contiki volatility paper
 
-    # tmax = writing_rate * mem * scale
+#     # tmax = writing_rate * mem * scale
 
-    mean = (mem * scale) / writing_rate
-    tmax = random.gauss(mean, mean/10)
-    tmin = nmin*tmax
+#     mean = (mem * scale) / writing_rate
+#     tmax = random.gauss(mean, mean/10)
+#     tmin = nmin*tmax
     
-    return (tmin, tmax)
+#     return (tmin, tmax)
 
 
 def add_sibling_edge(graph, parent, skip, p, pr, bw, d):
@@ -154,13 +204,13 @@ def add_sibling_edge(graph, parent, skip, p, pr, bw, d):
     for child in children:
         add_sibling_edge(graph, child, skip, p, pr, bw, d+1)
 
-def set_tree(topology, p, pr, bw):
+def subgraph_tree(topology, p, pr, bw):
     original_G = topology.G
     stg = nx.maximum_spanning_tree(topology.G, weight='BW')
-    for n in stg.nodes():
-        print(f'Node: {n}: {stg.nodes()[n]}')
-    for e in stg.edges():
-        print(f'Edge: {e}: {stg.edges()[e]}')
+    # for n in stg.nodes():
+    #     print(f'Node: {n}: {stg.nodes()[n]}')
+    # for e in stg.edges():
+    #     print(f'Edge: {e}: {stg.edges()[e]}')
     # find center, and add connection between children, using the supplied parameters for the gamma distribution
     center = nx.center(stg)[0]
     add_sibling_edge(stg, center, set([center]), p, pr, bw, 0)
@@ -168,7 +218,101 @@ def set_tree(topology, p, pr, bw):
     topology.G = stg
     return original_G, stg
 
-def main(stop_time, graphgen, serviceplacement, sourcedeployment, it, folder_results, folder_data, create_tree):
+
+def subgraph_full(topology):
+    return topology.copy(), topology
+
+
+def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
+    '''
+    Based on the colony generating algorithm from Guerrero et al., 2018: On the influence of fog colonies positioning in fog application makespan.
+    They concluded that the betweenness centrality was best for colony controller nodes.
+    '''
+    original_G = topology.G.copy()
+    centr = nx.betweenness_centrality(original_G)
+
+    centr = {xx: centr[xx] for xx in sorted(centr, reverse=True, key=lambda x: centr[x])[:ncolonies]}
+    print(f'Controllers: {centr}')
+    # set an attribute on all nodes indicating if they are a controller node.
+    iscontr = {n: False for n in original_G.nodes()}
+    for n in centr:
+        iscontr[n] = True
+
+    # Segment nodes in accordance to the closest controller node
+    closecontr = dict()
+    for n in topology.G.nodes:
+        if iscontr[n] == False:
+            close = dict()
+            for cn in centr:
+                # Use a short message, a probe as distance measure
+                close[cn] = nx.single_source_dijkstra(topology.G, n, cn, weight=lambda a, b, attr: 100 / (attr['BW'] * 1E6) + attr['PR']) 
+            closecontr[n] = min(close, key=lambda x: close[x][0])
+            print(f'Closest controller: {(n, closecontr[n])} {close[closecontr[n]]}')
+            #pprint.pprint(close)
+        else:
+            closecontr[n] = n
+    nx.set_node_attributes(topology.G, name='CONTROLLER', values=closecontr)
+
+    # Remove all edges that crosses cluster
+    for n in topology.G.nodes:
+        if iscontr[n] == False:
+            for nn in list(topology.G.neighbors(n)):
+                if closecontr[n] != closecontr[nn]:
+                    print(f'remove edge: {(n, nn)} {topology.G.edges()[(n,nn)]} {topology.G.nodes()[n]} {topology.G.nodes()[nn]}')
+                    topology.G.remove_edge(n, nn)
+
+    # Add a cloud server that are connected to all controllers, set a high propagation delay to make sure path is seldom through here
+    cloud = max(topology.G.nodes) + 1
+    topology.G.add_node(cloud)
+    attr = {cloud: cloudattr}
+    print(attr)
+    nx.set_node_attributes(topology.G, attr)
+    topology.G.nodes[cloud]['CONTROLLER'] = cloud
+    cedges = {(cloud, x): {'PR': random.gammavariate(*cloudpr), 'BW': random.gammavariate(*cloudbw)} for x in centr}
+    topology.G.add_edges_from(cedges)
+    nx.set_edge_attributes(topology.G, cedges)
+
+    return original_G, topology.G
+
+
+def find_correlation(graph, centrality, stats, filename):
+    '''
+    Find the best correlation between the centrality measures and the nodes containing data.
+    '''
+    # Make a dict of whether a node has been a server or not
+    servs = {n for n in stats.df_vol['dst']}
+    dserv = {x: False for x in graph.nodes()}
+    for s in servs:
+        dserv[s] = True
+    
+    # Plot the histogram of number of servers in centrality intervals
+
+    fig = plt.figure()
+    ncent = len(centrality)
+    ax = []
+    i = 1
+    for c in centrality:
+        cent = [centrality[c][n] for n in dserv if dserv[n]]
+        nodes = [centrality[c][n] for n in dserv]
+        ax.append(fig.add_subplot(ncent, 2, i))
+        ax.append(fig.add_subplot(ncent, 2, i+1))
+        ax[-2].hist(nodes, bins=50, log=True)
+        ax[-2].set_ylabel(c)
+        ax[-1].hist(cent, bins=50, log=True)
+        i += 2
+        # Any difference between the two populations?
+    plt.tight_layout()
+    plt.savefig(filename)
+
+    fig = plt.figure()
+    
+
+def print_aggregated_results(results):
+    '''
+    Print the aggregated results from the dict, where each dict entry is the results from one simulation
+    '''
+
+def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, folder_results, folder_data):
     # Topology
     
     t = Topology()
@@ -182,45 +326,47 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, it, folder_res
     # attrPR_BW = {x: 1 for x in t.G.edges()}
     # nx.set_edge_attributes(t.G, name='PR', values=attrPR_BW)
     # nx.set_edge_attributes(t.G, name='BW', values=attrPR_BW)
-    
+
     # Latency for edge is: message_size/(BW * 1E6) + PR
-    attrPR = {x: random.gammavariate(1, .2) for x in t.G.edges} # Gives mostly valuse between 0 and 1 second
-    attrBW = {x: random.gammavariate(1.5, 1) for x in t.G.edges}  # BW given in Mb/s
+    attrPR = {x: random.gammavariate(PR_gv_alpha, PR_gv_beta) for x in t.G.edges} # Gives mostly valuse between 0 and 1 second
+    attrBW = {x: random.gammavariate(BW_gv_alpha, BW_gv_beta) for x in t.G.edges}  # BW given in Mb/s
     nx.set_edge_attributes(t.G, name='PR', values=attrPR)
     nx.set_edge_attributes(t.G, name='BW', values=attrBW)
-    print('PR and BW')
+    #print('PR and BW')
     fe.write('Edge;PR;BW\n')
     for e in t.G.edges():
-        print(f'e: {e}, PR: {t.G.edges()[e]["PR"]} BW: {t.G.edges()[e]["BW"]}')
+        #print(f'e: {e}, PR: {t.G.edges()[e]["PR"]} BW: {t.G.edges()[e]["BW"]}')
         fe.write(f'{e};{t.G.edges()[e]["PR"]};{t.G.edges()[e]["BW"]}\n')
     fe.close()
-        
-    attrIPT = {x: random.gauss(1000, 200) for x in t.G.nodes()}
+ 
+    attrIPT = {x: abs(random.gauss(IPT_g_mu, IPT_g_sigma)) for x in t.G.nodes()}
     nx.set_node_attributes(t.G, name='IPT', values=attrIPT)
     
     # MEM (in MB) set at random from a n.e.d. 1E-4 gives very few at 100G, avg at 10G
-    attrMEM = {x: int(random.expovariate(1E-4)) for x in t.G.nodes()}
+    attrMEM = {x: int(random.expovariate(MEM_ev_lambd)) for x in t.G.nodes()}
     nx.set_node_attributes(t.G, name='MEM', values=attrMEM)
     #plt.hist([attrMEM[x] for x in attrMEM])
     #plt.show()
     #pprint.pprint(attrMEM)
-    print('IPT and MEM')
+    # print('IPT and MEM')
     fn.write('Node;IPT;MEM\n')
     for n in t.G.nodes():
-        print(f'n: {n}, IPT: {t.G.nodes()[n]["IPT"]}, MEM: {t.G.nodes()[n]["MEM"]}')
+        # print(f'n: {n}, IPT: {t.G.nodes()[n]["IPT"]}, MEM: {t.G.nodes()[n]["MEM"]}')
         fn.write(f'{n};{t.G.nodes()[n]["IPT"]};{t.G.nodes()[n]["MEM"]}\n')
     fn.close()
 
-    # Create a maximum spanning tree from the graph, and exchange the graph with the subgraph
     nx.write_gexf(t.G, f'{folder_results}/{it:04}_original.gexf')
-    original_G = set_tree(t, .5, (1, .2), (1.5, 1))
+    nx.write_gpickle(t.G, f'{folder_results}/{it:04}_original.pkl')
     
-    nx.write_gexf(t.G, f'{folder_results}/{it:04}_spanning_tree.gexf')
-    with open(f'{folder_results}/{it:04}_tree_edges.csv', 'w') as f:
+    original_G, _ = subgraph['f'](t, **subgraph['args'])
+    nx.write_gexf(t.G, f'{folder_results}/{it:04}_{subgraph["name"]}.gexf')
+    nx.write_gpickle(t.G, f'{folder_results}/{it:04}_{subgraph["name"]}.pkl')
+
+    with open(f'{folder_results}/{it:04}_{subgraph["name"]}.csv', 'w') as f:
         f.write('Edge;PR;BW\n')
         for e in t.G.edges():
             f.write(f'{e};{t.G.edges()[e]["PR"]};{t.G.edges()[e]["BW"]}\n')
-
+    
     # Application
     japp = json.load(open(f'{folder_data}/appDef.json'))
     apps = create_applications_from_json(japp)
@@ -258,8 +404,19 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, it, folder_res
     s.run(stop_time)
     # s.print_debug_assignaments()
 
+    # Statistics
     stats = Stats(defaultPath=f'{folder_results}/{it:04}_sim_trace')
     stats.showVolatility(stop_time, t)
+
+    # Correlation between server nodes and graph measures
+    # Assume no knowledge of tree structure or clustering, use the original graph
+    centrality = dict()
+    centrality['degree']      = nx.degree_centrality(original_G)
+    centrality['eigenvector'] = nx.eigenvector_centrality(original_G, max_iter=1000)
+    centrality['closeness']   = nx.closeness_centrality(original_G)
+    centrality['betweenness'] = nx.betweenness_centrality(original_G)
+    centrality['harmonic']    = nx.harmonic_centrality(original_G)
+    find_correlation(original_G, centrality, stats,  f'{folder_results}/{it:04}_correlation.pdf')
 
 
 if "__main__" == __name__:
@@ -277,11 +434,25 @@ if "__main__" == __name__:
                        'args': {'n': DEFAULT_SIZE, 'p1': .05, 'p2': .01}}}
 
     placement = {'randomstatic': FogRandomStaticPlacement,
-                 'treesibling': FogTreeSiblingConnectionPlacement}
+                 'treesibling': FogTreeSiblingConnectionPlacement,
+                 'colony': FogColonyPlacement}
     
     sourcedeployment = {'lowresource': deploy_random_lowresource_sources,
-                        'leafnodes': deploy_leaf_nodes_sources}
-    
+                        'leafnodes': deploy_leaf_nodes_sources,
+                        'colony': deploy_colony_sources}
+    subgraph = {'full': {'f': subgraph_full,
+                         'name': 'full',
+                         'args': dict()},
+                'tree': {'f': subgraph_tree,
+                         'name': 'tree',
+                         'args': {'p': P_SIBLING, 'pr': (PR_gv_alpha, PR_gv_beta), 'bw': (BW_gv_alpha, BW_gv_beta)}},
+                'colony': {'f': subgraph_colony,
+                           'name': 'colony',
+                           'args': {'ncolonies': NCOLONIES,
+                                    'cloudpr': (PRC_gv_alpha, PRC_gv_beta),
+                                    'cloudbw': (BWC_gv_alpha, BWC_gv_beta),
+                                    'cloudattr': {'IPT': 1E9, 'MEM': 1E9}}}}
+
     aparse = argparse.ArgumentParser(description='Create a network, test various fog network structures')
     aparse.add_argument('-r', '--results', default='results', help='Directory to store results')
     aparse.add_argument('-d', '--datadir', default='data2', help='Directory for app and logging setup')
@@ -289,11 +460,12 @@ if "__main__" == __name__:
     aparse.add_argument('-a', '--args', help='Named arguments for graph generator')
     aparse.add_argument('-p', '--placement', choices=placement.keys(), default='randomstatic', help='Fog service placement algorithm')
     aparse.add_argument('-s', '--source', choices=sourcedeployment.keys(), default='lowresource', help='Message source placement')
-    aparse.add_argument('-t', '--tree', action='store_true', help='Create a maximum spanning tree w/ sibling connections from the generated graph')
+    aparse.add_argument('-u', '--subgraph', choices=subgraph.keys(), default='original', help='Subgraph for message routing in network')
+    aparse.add_argument('-b', '--subargs', help='Subgraph arguments if others than defaults are given')
     args = aparse.parse_args()
 
-    sim_duration = 600
-    iterations = 1
+    sim_duration = SIM_DURATION
+    iterations = SIM_ITERS
 
     folder_results = Path(args.results)
     folder_results.mkdir(parents=True, exist_ok=True)
@@ -309,34 +481,64 @@ if "__main__" == __name__:
         for e in a:
             graphgen[args.graph]['args'][e] = a[e]
 
+    if args.subargs:
+        a = json.loads(args.subargs)
+        for e in a:
+            subgraph[args.subgraph]['args'][e] = a[e]
+            
     print(f'Parameters: Graph generator   = {graphgen[args.graph]["name"]}, args = {graphgen[args.graph]["args"]}')
     print(f'            Placement         = {args.placement}')
     print(f'            Source deployment = {args.source}')
     gcpy = graphgen[args.graph].copy()
     pcpy = placement.copy()
     scpy = sourcedeployment.copy()
+    ucpy = subgraph[args.subgraph].copy()
     
     settings = {'graph': {args.graph: gcpy},
                 'placement': {args.placement: pcpy[args.placement]},
                 'sourcedeployment': {args.source: scpy[args.source]},
-                'datadir': args.datadir}
+                'subgraph': {args.subgraph: ucpy},
+                'datadir': args.datadir,
+                'hardcoded': {'NSOURCES': NSOURCES,
+                              'PSERVER': PSERVER,
+                              'MINMEM': MINMEM,
+                              'PR_gv_alpha': PR_gv_alpha,
+                              'PR_gv_beta': PR_gv_beta,
+                              'BW_gv_alpha': BW_gv_alpha,
+                              'BW_gv_beta': BW_gv_beta,
+                              'PRC_gv_alpha': PR_gv_alpha,
+                              'PRC_gv_beta': PR_gv_beta,
+                              'BWC_gv_alpha': BW_gv_alpha,
+                              'BWC_gv_beta': BW_gv_beta,
+                              'IPT_g_mu': IPT_g_mu,
+                              'IPT_g_sigma': IPT_g_sigma,
+                              'MEM_ev_lambd': MEM_ev_lambd,
+                              'SIM_DURATION': SIM_DURATION,
+                              'SIM_ITERS': SIM_ITERS,
+                              'P_SIBLING': P_SIBLING,
+                              'NCOLONIES': NCOLONIES}}
     # change pointers to strings
     settings['graph'][args.graph]['f'] = str(settings['graph'][args.graph]['f'])
     settings['placement'][args.placement] = str(settings['placement'][args.placement])
     settings['sourcedeployment'][args.source] = str(settings['sourcedeployment'][args.source])
+    settings['subgraph'][args.subgraph]['f'] = str(settings['subgraph'][args.subgraph]['f'])
+    
     with open(f'{args.results}/settings.json', 'w') as f:
         json.dump(settings, f, indent=4)
-    
+
+    result = dict()
     for i in range(iterations):
         tstart = time.time()
-        main(sim_duration,
-             graphgen[args.graph],
-             placement[args.placement],
-             sourcedeployment[args.source],
-             i,
-             folder_results,
-             folder_data,
-             args.tree)
+        result[i] = main(sim_duration,
+                         graphgen[args.graph],
+                         placement[args.placement],
+                         sourcedeployment[args.source],
+                         subgraph[args.subgraph],
+                         i,
+                         folder_results,
+                         folder_data)
         print(f'\n--- Iteration: {i}: {time.time() - tstart} seconds ---')
 
+    print_aggregated_results(result)
+    
     print('simulation finished')
