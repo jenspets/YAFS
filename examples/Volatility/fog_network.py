@@ -166,32 +166,6 @@ def deploy_leaf_nodes_sources(sim):
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
 
 
-def add_sibling_edge(graph, parent, skip, p, pr, bw, d):
-    ''' 
-    Add edges between siblings in a tree. This will generate new edges between siblings with new randomly selected attributes.
-    '''
-    children = nx.descendants_at_distance(graph, parent, 1)
-    children = set(children) - skip
-    skip.update(children)
-    children = list(children)
-    nx.set_node_attributes(graph, {parent: d}, name='Depth')
-    
-    # print(' '*d + f'{parent} - {children} - {skip}')
-    if len(children) < 1:
-        return
-
-    if len(children) > 1:
-        pairs = []
-        for pair in itertools.combinations(children, 2):
-            if p >= random.random():
-                pairs.append(pair)
-        graph.add_edges_from(pairs)
-        attrs = {pair: {'PR': random.gammavariate(*pr), 'BW': random.gammavariate(*bw)} for pair in pairs}
-        nx.set_edge_attributes(graph, attrs)
-
-    for child in children:
-        add_sibling_edge(graph, child, skip, p, pr, bw, d+1)
-
 def connect_children(tree, graph, grandp, parent, p):
     '''
     From the parent node, parent, in the tree, copy connection for children from graph with probability p.
@@ -220,7 +194,7 @@ def connect_children(tree, graph, grandp, parent, p):
 
     return edges
 
-def subgraph_tree(topology, p, pr=None, bw=None):
+def subgraph_tree(topology, p):
     original_G = topology.G.copy()
     stg = nx.minimum_spanning_tree(topology.G, weight='PR')
     # for n in stg.nodes():
@@ -488,7 +462,7 @@ if "__main__" == __name__:
                          'args': dict()},
                 'tree': {'f': subgraph_tree,
                          'name': 'tree',
-                         'args': {'p': P_SIBLING, 'pr': (PR_gv_alpha, PR_gv_beta), 'bw': (BW_gv_alpha, BW_gv_beta)}},
+                         'args': {'p': P_SIBLING}},
                 'colony': {'f': subgraph_colony,
                            'name': 'colony',
                            'args': {'ncolonies': NCOLONIES,
