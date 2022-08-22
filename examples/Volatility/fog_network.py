@@ -197,29 +197,32 @@ def connect_children(tree, graph, grandp, parent, p):
     From the parent node, parent, in the tree, copy connection for children from graph with probability p.
     As the graph is undirected, exclude the grandparent node.
     '''
-    n = list(nx.neighbors(tree.nodes[parent], graph))
-
+    n = list(tree.neighbors(parent))
+    
     if grandp != None:
         n.remove(grandp)
-
+    print(n, grandp, parent)
     if len(n) <= 1:
-        return
+        return []
 
     edges = []
     for e in itertools.combinations(n, 2):
-        if random.random() < p:
+        if graph.has_edge(*e) and random.random() < p:
             edges.append(e)
-    tree.add_edges_from(edges)
-    attr = {edge: {'PR': graph.edges[edge]['PR'], 'BW': graph.edges[edge]['BW']} for edge in edges}
-    nx.set_edge_attributes(tree, attr)
+    # print(edges)
+    # tree.add_edges_from(edges)
+    # attr = {edge: {'PR': graph.edges[edge[0], edge[1]]['PR'], 'BW': graph.edges[edge[0], edge[1]]['BW']} for edge in edges}
+    # attr = {edge: {'PR': 1, 'BW': 1} for edge in edges}
+    # nx.set_edge_attributes(tree, attr)
 
     for child in n:
-        connect_children(tree, graph, parent, child, p)
+        edges.extend(connect_children(tree, graph, parent, child, p))
 
+    return edges
 
 def subgraph_tree(topology, p, pr=None, bw=None):
     original_G = topology.G.copy()
-    stg = nx.maximum_spanning_tree(topology.G, weight='BW')
+    stg = nx.minimum_spanning_tree(topology.G, weight='PR')
     # for n in stg.nodes():
     #     print(f'Node: {n}: {stg.nodes()[n]}')
     # for e in stg.edges():
@@ -230,8 +233,10 @@ def subgraph_tree(topology, p, pr=None, bw=None):
 
     # TODO: This should copy existing edges, not create new ones
     # add_sibling_edge(stg, center, set([center]), p, pr, bw, 0)
-    connect_children(stg, original_G, None, center, p)
-        
+    edges = connect_children(stg, original_G, None, center, p)
+    stg.add_edges_from(edges)
+    attr = {edge: {'PR': original_G.edges[edge]['PR'], 'BW': original_G.edges[edge]['BW']} for edge in edges}
+    nx.set_edge_attributes(stg, attr)
     
     topology.G = stg
     return original_G, stg
@@ -447,7 +452,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     stats = Stats(defaultPath=f'{folder_results}/{it:04}_sim_trace')
     stats.showVolatility(stop_time, t)
 
-;    # Correlation between server nodes and graph measures
+    # Correlation between server nodes and graph measures
     # Assume no knowledge of tree structure or clustering, use the original graph
     
     find_correlation(original_G, centrality, stats,  f'{folder_results}/{it:04}_correlation.pdf')
