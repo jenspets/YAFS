@@ -57,9 +57,10 @@ class FogRandomStaticPlacement(Placement):
             mem = sim.topology.G.nodes()[n]['MEM']
             if mem > minmem and random.random() <= pserver:
                 pots.append(n)
-        
+
+        print(f'Server nodes for {app_name} ({len(pots)}): {pots}')
         for module in services.keys():
-            idDES = sim.deploy_module(app_name, module, services[module], pots[0:1])
+            idDES = sim.deploy_module(app_name, module, services[module], pots)
 
 
 class FogTreeSiblingConnectionPlacement(Placement):
@@ -81,6 +82,7 @@ class FogTreeSiblingConnectionPlacement(Placement):
             if mem > minmem and sim.topology.G.degree(n) > 1 and random.random() <= pserver:
                 serverlist.append(n)
 
+        print(f'Server nodes ({len(serverlist)}): {serverlist}')
         for module in services.keys():
             idDES = sim.deploy_module(app_name, module, services[module], serverlist)
 
@@ -103,6 +105,7 @@ class FogColonyPlacement(Placement):
             if n != controller and mem > minmem and random.random() <= pserver:
                 serverlist.append(n)
 
+        print(f'Server nodes ({len(serverlist)}): {serverlist}')
         for module in services.keys():
             idDES = sim.deploy_module(app_name, module, services[module], serverlist)
 
@@ -112,7 +115,7 @@ def deploy_random_lowresource_sources(sim):
     Deploy a number of sources, at the most memory constrained nodes, each with a message sending distribution. 
     '''
     nsources = int(nx.number_of_nodes(sim.topology.G) * NSOURCES)
-    
+    print('Number of sources: {nsources}')
     # make a list of sources, select the nsources with lowest MEM
     psources = [x for x in sorted(sim.topology.G.nodes(), key=lambda x: sim.topology.G.nodes()[x]['MEM'])][:nsources]
 
@@ -163,25 +166,10 @@ def deploy_leaf_nodes_sources(sim):
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
 
 
-# def get_eraselimits_gcbased(mem, writing_rate=120, scale=10):
-#     ''' Calculate erase time volatility limits for a uniform distribution from the MeM size and the writing rate (s/w).
-#     This should also take into account the dynamic load of the node, as much writing faster will overwrite obsolete data.
-#     For now, assume a static load on the nodes, set individually. I don't think YAFS records the load in each node.
-#     The derivative should be decreasing with higher number, but not be negative or zero.
-#     '''
-
-#     nmin = .5  # Min/max number of remaining sectors after a GC, based loosely on Contiki volatility paper
-
-#     # tmax = writing_rate * mem * scale
-
-#     mean = (mem * scale) / writing_rate
-#     tmax = random.gauss(mean, mean/10)
-#     tmin = nmin*tmax
-    
-#     return (tmin, tmax)
-
-
 def add_sibling_edge(graph, parent, skip, p, pr, bw, d):
+    ''' 
+    Add edges between siblings in a tree. This will generate new edges between siblings with new randomly selected attributes.
+    '''
     children = nx.descendants_at_distance(graph, parent, 1)
     children = set(children) - skip
     skip.update(children)
@@ -195,32 +183,62 @@ def add_sibling_edge(graph, parent, skip, p, pr, bw, d):
     if len(children) > 1:
         pairs = []
         for pair in itertools.combinations(children, 2):
-            if p <= random.random():
+            if p >= random.random():
                 pairs.append(pair)
-                graph.add_edges_from(pairs)
-                attrs = {pair: {'PR': random.gammavariate(*pr), 'BW': random.gammavariate(*bw)} for pair in pairs}
-                nx.set_edge_attributes(graph, attrs)
+        graph.add_edges_from(pairs)
+        attrs = {pair: {'PR': random.gammavariate(*pr), 'BW': random.gammavariate(*bw)} for pair in pairs}
+        nx.set_edge_attributes(graph, attrs)
 
     for child in children:
         add_sibling_edge(graph, child, skip, p, pr, bw, d+1)
 
-def subgraph_tree(topology, p, pr, bw):
-    original_G = topology.G
+def connect_children(tree, graph, grandp, parent, p):
+    '''
+    From the parent node, parent, in the tree, copy connection for children from graph with probability p.
+    As the graph is undirected, exclude the grandparent node.
+    '''
+    n = list(nx.neighbors(tree.nodes[parent], graph))
+
+    if grandp != None:
+        n.remove(grandp)
+
+    if len(n) <= 1:
+        return
+
+    edges = []
+    for e in itertools.combinations(n, 2):
+        if random.random() < p:
+            edges.append(e)
+    tree.add_edges_from(edges)
+    attr = {edge: {'PR': graph.edges[edge]['PR'], 'BW': graph.edges[edge]['BW']} for edge in edges}
+    nx.set_edge_attributes(tree, attr)
+
+    for child in n:
+        connect_children(tree, graph, parent, child, p)
+
+
+def subgraph_tree(topology, p, pr=None, bw=None):
+    original_G = topology.G.copy()
     stg = nx.maximum_spanning_tree(topology.G, weight='BW')
     # for n in stg.nodes():
     #     print(f'Node: {n}: {stg.nodes()[n]}')
     # for e in stg.edges():
     #     print(f'Edge: {e}: {stg.edges()[e]}')
+    
     # find center, and add connection between children, using the supplied parameters for the gamma distribution
     center = nx.center(stg)[0]
-    add_sibling_edge(stg, center, set([center]), p, pr, bw, 0)
+
+    # TODO: This should copy existing edges, not create new ones
+    # add_sibling_edge(stg, center, set([center]), p, pr, bw, 0)
+    connect_children(stg, original_G, None, center, p)
+        
     
     topology.G = stg
     return original_G, stg
 
 
 def subgraph_full(topology):
-    return topology.copy(), topology
+    return topology.G.copy(), topology.G
 
 
 def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
@@ -229,7 +247,7 @@ def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
     They concluded that the betweenness centrality was best for colony controller nodes.
     '''
     original_G = topology.G.copy()
-    centr = nx.betweenness_centrality(original_G)
+    centr = nx.betweenness_centrality(topology.G)
 
     centr = {xx: centr[xx] for xx in sorted(centr, reverse=True, key=lambda x: centr[x])[:ncolonies]}
     print(f'Controllers: {centr}')
@@ -262,7 +280,7 @@ def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
                     topology.G.remove_edge(n, nn)
 
     # Add a cloud server that are connected to all controllers, set a high propagation delay to make sure path is seldom through here
-    cloud = max(topology.G.nodes) + 1
+    cloud = int(max(topology.G.nodes) + 1)
     topology.G.add_node(cloud)
     attr = {cloud: cloudattr}
     print(attr)
@@ -284,6 +302,7 @@ def find_correlation(graph, centrality, stats, filename):
     dserv = {x: False for x in graph.nodes()}
     for s in servs:
         dserv[s] = True
+    print(f'Number of actual server nodes: {len(servs)} {servs}')
     
     # Plot the histogram of number of servers in centrality intervals
 
@@ -292,14 +311,26 @@ def find_correlation(graph, centrality, stats, filename):
     ax = []
     i = 1
     for c in centrality:
-        cent = [centrality[c][n] for n in dserv if dserv[n]]
-        nodes = [centrality[c][n] for n in dserv]
-        ax.append(fig.add_subplot(ncent, 2, i))
-        ax.append(fig.add_subplot(ncent, 2, i+1))
-        ax[-2].hist(nodes, bins=50, log=True)
-        ax[-2].set_ylabel(c)
-        ax[-1].hist(cent, bins=50, log=True)
-        i += 2
+        k = min(centrality[c])
+        print(f'minimum centrality measure for {c}: {k}')
+        if k <= 0:
+            k = .001 - k  # k is negative or zero
+            centrality_scaled = [centrality[c][x]+k for x in centrality[c]]
+        else:
+            centrality_scaled = [centrality[c][x] for x in centrality[c]]
+        centrality_scaled, l = spstats.boxcox(centrality_scaled)
+        
+        cent = [centrality_scaled[n] for n in dserv if dserv[n]]
+        nodes = [centrality_scaled[n] for n in dserv if not dserv[n]]
+        ax.append(fig.add_subplot(ncent, 3, i))
+        ax.append(fig.add_subplot(ncent, 3, i+1))
+        ax.append(fig.add_subplot(ncent, 3, i+2))
+        ax[-3].hist(centrality_scaled, bins='auto', log=False)
+        ax[-2].hist(nodes, bins='auto', log=False)
+        ax[-3].set_ylabel(c)
+        ax[-1].hist(cent, bins='auto', log=False)
+        i += 3
+        print(f'BoxCox lambda = {l}')
         # Any difference between the two populations?
     plt.tight_layout()
     plt.savefig(filename)
@@ -357,6 +388,14 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
 
     nx.write_gexf(t.G, f'{folder_results}/{it:04}_original.gexf')
     nx.write_gpickle(t.G, f'{folder_results}/{it:04}_original.pkl')
+
+    centrality = dict()
+    centrality['degree']      = nx.degree_centrality(t.G)
+    centrality['eigenvector'] = nx.eigenvector_centrality(t.G, max_iter=1000)
+    centrality['closeness']   = nx.closeness_centrality(t.G)
+    centrality['betweenness'] = nx.betweenness_centrality(t.G)
+    centrality['harmonic']    = nx.harmonic_centrality(t.G)
+    
     
     original_G, _ = subgraph['f'](t, **subgraph['args'])
     nx.write_gexf(t.G, f'{folder_results}/{it:04}_{subgraph["name"]}.gexf')
@@ -408,14 +447,9 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     stats = Stats(defaultPath=f'{folder_results}/{it:04}_sim_trace')
     stats.showVolatility(stop_time, t)
 
-    # Correlation between server nodes and graph measures
+;    # Correlation between server nodes and graph measures
     # Assume no knowledge of tree structure or clustering, use the original graph
-    centrality = dict()
-    centrality['degree']      = nx.degree_centrality(original_G)
-    centrality['eigenvector'] = nx.eigenvector_centrality(original_G, max_iter=1000)
-    centrality['closeness']   = nx.closeness_centrality(original_G)
-    centrality['betweenness'] = nx.betweenness_centrality(original_G)
-    centrality['harmonic']    = nx.harmonic_centrality(original_G)
+    
     find_correlation(original_G, centrality, stats,  f'{folder_results}/{it:04}_correlation.pdf')
 
 
@@ -431,7 +465,10 @@ if "__main__" == __name__:
                        'args': {'n': DEFAULT_SIZE, 'k': 5, 'p': .05}},
                 'rl': {'f': nx.generators.random_lobster,
                        'name': 'Random Lobster',
-                       'args': {'n': DEFAULT_SIZE, 'p1': .05, 'p2': .01}}}
+                       'args': {'n': DEFAULT_SIZE, 'p1': .05, 'p2': .01}},
+                'gexf': {'f': nx.read_gexf,
+                         'name': 'Existing GEXF graph',
+                         'args': {'path': None, 'node_type': int}}}
 
     placement = {'randomstatic': FogRandomStaticPlacement,
                  'treesibling': FogTreeSiblingConnectionPlacement,
@@ -440,6 +477,7 @@ if "__main__" == __name__:
     sourcedeployment = {'lowresource': deploy_random_lowresource_sources,
                         'leafnodes': deploy_leaf_nodes_sources,
                         'colony': deploy_colony_sources}
+
     subgraph = {'full': {'f': subgraph_full,
                          'name': 'full',
                          'args': dict()},
@@ -460,7 +498,7 @@ if "__main__" == __name__:
     aparse.add_argument('-a', '--args', help='Named arguments for graph generator')
     aparse.add_argument('-p', '--placement', choices=placement.keys(), default='randomstatic', help='Fog service placement algorithm')
     aparse.add_argument('-s', '--source', choices=sourcedeployment.keys(), default='lowresource', help='Message source placement')
-    aparse.add_argument('-u', '--subgraph', choices=subgraph.keys(), default='original', help='Subgraph for message routing in network')
+    aparse.add_argument('-u', '--subgraph', choices=subgraph.keys(), default='full', help='Subgraph for message routing in network')
     aparse.add_argument('-b', '--subargs', help='Subgraph arguments if others than defaults are given')
     args = aparse.parse_args()
 
@@ -489,6 +527,8 @@ if "__main__" == __name__:
     print(f'Parameters: Graph generator   = {graphgen[args.graph]["name"]}, args = {graphgen[args.graph]["args"]}')
     print(f'            Placement         = {args.placement}')
     print(f'            Source deployment = {args.source}')
+    print(f'            Subgraph          = {subgraph[args.subgraph]["name"]}, args = {subgraph[args.subgraph]["args"]}')
+
     gcpy = graphgen[args.graph].copy()
     pcpy = placement.copy()
     scpy = sourcedeployment.copy()
