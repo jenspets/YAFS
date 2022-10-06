@@ -41,7 +41,24 @@ SIM_ITERS    = 1     # Number of iterations
 P_SIBLING    = .5    # Probability for creating a link between siblings in a tree
 NCOLONIES    = 10    # Default number of fog colonies
 
-class FogRandomStaticPlacement(Placement):
+
+class FogPlacement(Placement):
+    '''
+    A superclass for common functionality between service placement methods
+    '''
+
+    def __init__(self, name, blocklist=[]):
+        super().__init__(name)
+        self.blocklist = blocklist
+
+    def set_blocklist(self, blocklist):
+        self.blocklist = blocklist
+
+    def get_blocklist(self):
+        return self.blocklist
+
+
+class FogRandomStaticPlacement(FogPlacement):
     '''
     The class places services at random nodes that have minimum required MEM configuration. 
     '''
@@ -58,17 +75,25 @@ class FogRandomStaticPlacement(Placement):
             if mem > minmem and random.random() <= pserver:
                 pots.append(n)
 
-        print(f'Server nodes for {app_name} ({len(pots)}): {pots}')
+        # No specific constraints for actuator nodes, but they should not be the same as sources or servers
+        actuatornodes = [x for x in sim.topology.G.nodes() if x not in self.blocklist and x not in pots]
+        if not actuatornodes:
+            actuatornodes = [0]
+        
+        # print(f'Server nodes for {app_name} ({len(pots)}): {pots}')
         for module in services.keys():
-            idDES = sim.deploy_module(app_name, module, services[module], pots)
+            if module.startswith('SERVICE'):
+                idDES = sim.deploy_module(app_name, module, services[module], pots)
+            elif module.startswith('ACTUATOR'):
+                idDES = sim.deploy_module(app_name, module, services[module], [random.choice(actuatornodes)])
 
 
-class FogTreeSiblingConnectionPlacement(Placement):
+class FogTreeSiblingConnectionPlacement(FogPlacement):
     '''
     The class generate a tree structure from the network, with connections between siblings. 
     The service is placed in all nodes that have minimum requirements, and that is not a leaf node
     '''
-    
+
     def initial_allocation(self, sim, app_name):
         app = sim.apps[app_name]
         services = app.services
@@ -86,12 +111,13 @@ class FogTreeSiblingConnectionPlacement(Placement):
         for module in services.keys():
             idDES = sim.deploy_module(app_name, module, services[module], serverlist)
 
-class FogColonyPlacement(Placement):
+class FogColonyPlacement(FogPlacement):
     '''
     The class places servers in some of the nodes in some clusters, simulating busy nodes whithin a cluster.
     In clusters with no modules, it simulates a cluster where no nodes can process the request.
     It will not place a service in the orchestration node.
     '''
+
     def initial_allocation(self, sim, app_name):
         app = sim.apps[app_name]
         services = app.services
@@ -126,6 +152,8 @@ def deploy_random_lowresource_sources(sim):
             dist = deterministic_distribution(100, name='Deterministic')
             idDES = sim.deploy_source(a, id_node=i, msg=msg, distribution=dist)
 
+
+#  TODO: I'm not sure if the assumption about sources in GW is correct... 
 def deploy_colony_sources(sim):
     '''
     Deploy source in the service orchestration nodes, simulating a gateway or node contacting this node directly.
@@ -416,7 +444,8 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
 
     # Deploy sources
     sourcedeployment(s)
-
+    placement.set_blocklist([s.alloc_source[i]['id'] for i in s.alloc_source])
+    
     # Run simulation
     logging.info(f' Performing simulation {it}')
     s.run(stop_time)
