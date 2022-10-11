@@ -13,6 +13,7 @@ import itertools
 import scipy.stats as spstats
 import tqdm
 import pandas as pd
+import math
 
 from yafs.core import Sim
 from yafs.application import create_applications_from_json
@@ -43,15 +44,17 @@ SIM_ITERS    = 2     # Number of iterations
 P_SIBLING    = .5    # Probability for creating a link between siblings in a tree
 NCOLONIES    = 10    # Default number of fog colonies
 PROBE_SIZE   = 20
+MIN_CUTOFF   = 5     # minimum path length cutoff above shortest path
 
 class FogPlacement(Placement):
     '''
     A superclass for common functionality between service placement methods
     '''
 
-    def __init__(self, name, blocklist=[]):
+    def __init__(self, name, blocklist=[], serverprob=PSERVER):
         super().__init__(name)
         self.blocklist = blocklist
+        self.serverprob = serverprob
 
     def set_blocklist(self, blocklist):
         self.blocklist = blocklist
@@ -68,20 +71,23 @@ class FogRandomStaticPlacement(FogPlacement):
     def initial_allocation(self, sim, app_name):
         app = sim.apps[app_name]
         services = app.services
-        pserver = PSERVER
+        #pserver = PSERVER
         pots = []
         minmem = MINMEM    # Min 1 GB MEM
 
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
-            if mem > minmem and random.random() <= pserver:
+            if mem > minmem and random.random() <= self.serverprob and n not in self.blocklist:
                 pots.append(n)
 
         # No specific constraints for actuator nodes, but they should not be the same as sources or servers
         actuatornodes = [x for x in sim.topology.G.nodes() if x not in self.blocklist and x not in pots]
         if not actuatornodes:
-            actuatornodes = [0]
-        
+            act = random.sample(pots, 1)[0]
+            print('no elligible actuatornodes, using {act} from server nodes')
+            actuatornodes = [act]
+            pots.remove(act)
+            
         # print(f'Server nodes for {app_name} ({len(pots)}): {pots}')
         for module in services.keys():
             if module.startswith('SERVICE'):
@@ -100,13 +106,13 @@ class FogTreeSiblingConnectionPlacement(FogPlacement):
         app = sim.apps[app_name]
         services = app.services
         minmem = MINMEM
-        pserver = PSERVER
+        #pserver = PSERVER
         serverlist = []
 
         # Select nodes to act as servers
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
-            if mem > minmem and sim.topology.G.degree(n) > 1 and random.random() <= pserver:
+            if mem > minmem and sim.topology.G.degree(n) > 1 and random.random() <= self.serverprob:
                 serverlist.append(n)
 
         print(f'Server nodes ({len(serverlist)}): {serverlist}')
@@ -124,13 +130,13 @@ class FogColonyPlacement(FogPlacement):
         app = sim.apps[app_name]
         services = app.services
         minmem = MINMEM
-        pserver = PSERVER
+        # pserver = PSERVER
         serverlist = []
 
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
             controller = sim.topology.G.nodes()[n]['CONTROLLER']
-            if n != controller and mem > minmem and random.random() <= pserver:
+            if n != controller and mem > minmem and random.random() <= self.serverprob:
                 serverlist.append(n)
 
         print(f'Server nodes ({len(serverlist)}): {serverlist}')
@@ -157,7 +163,7 @@ def deploy_random_lowresource_sources(sim):
     return nsources
 
 
-#  TODO: I'm not sure if the assumption about sources in GW is correct... 
+# TODO: Check the assumption about sources in GW is correct... 
 def deploy_colony_sources(sim):
     '''
     Deploy source in the service orchestration nodes, simulating a gateway or node contacting this node directly.
@@ -210,7 +216,7 @@ def connect_children(tree, graph, grandp, parent, p):
     
     if grandp != None:
         n.remove(grandp)
-    print(n, grandp, parent)
+    # print(n, grandp, parent)
     if len(n) <= 1:
         return []
 
@@ -297,7 +303,7 @@ def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
     cloud = int(max(topology.G.nodes) + 1)
     topology.G.add_node(cloud)
     attr = {cloud: cloudattr}
-    print(attr)
+    # print(attr)
     nx.set_node_attributes(topology.G, attr)
     topology.G.nodes[cloud]['CONTROLLER'] = cloud
     cedges = {(cloud, x): {'PR': random.gammavariate(*cloudpr), 'BW': random.gammavariate(*cloudbw)} for x in centr}
@@ -358,7 +364,7 @@ def print_aggregated_results_rank(results, folder_results):
     '''
     agg = {}
 
-    print(results)
+    #print(results)
     for i in results:
         for m in i:
             try:
@@ -370,35 +376,44 @@ def print_aggregated_results_rank(results, folder_results):
     df = pd.DataFrame(agg)
     bplot = df.boxplot(rot=90, grid=False, showmeans=True, fontsize=12)
     
-    plt.show()
     plt.savefig(f'{folder_results}/servernode_ranks.pdf', dpi=600, bbox_inches='tight')
     
     # TODO: Write the mean, median, quartiles min and max to file and stdout
-    
+    print(df.describe())
+    df.describe().to_csv(f'{folder_results}/servernode_ranks.csv')
 
-def calculate_internode_importance(G, src, dst):
+
+def calculate_internode_importance(G, src, dst, cutoff):
     '''
     Given a graph and endpoints, calculate the importance of each node in the network
     '''
     wsums = []
 
     shortestpath = nx.shortest_path_length(G, src, dst)
-    paths = list(nx.all_simple_paths(G, src, dst, cutoff=shortestpath+5))
+    co = max(shortestpath*math.ceil(cutoff), MIN_CUTOFF)
+    paths = list(nx.all_simple_paths(G, src, dst, cutoff=co))
     #for path in tqdm.tqdm(map(nx.utils.pairwise, paths), desc='Calculate edge weights'):
     for path in map(nx.utils.pairwise, paths):
         w = 1/sum([G.edges[x]['PR'] + PROBE_SIZE/G.edges[x]['BW'] for x in path])
         wsums.append(w)
+    # print()
+    # print(shortestpath*math.ceil(cutoff), len(wsums), sum(wsums), len(paths), src, dst)
 
     wnodes = {}
+    wnodes['stats'] = {}
+    wnodes['stats']['shortestpath'] = shortestpath
+    wnodes['stats']['cutoff'] = co
+    wnodes['stats']['npaths'] = len(paths)
     wnodes['nodes'] = {}
     for v in tqdm.tqdm(G.nodes, desc='Apply edge weights'):
         wnodes['nodes'][v] = {}
         wnodes['nodes'][v]['nodeweight'] = sum([wsums[x[0]] for x in enumerate(paths) if v in paths[x[0]]])
-        
+        # print()
+        # print(v, [wsums[x[0]] for x in enumerate(paths) if v in paths[x[0]]])
     return wnodes
 
 
-def internode_importance(original_G, sim, stats, include_endnodes=True):
+def internode_importance(original_G, sim, stats, cutoff, include_endnodes=True):
     '''
     Find the internode importance of the nodes between source and target
     '''
@@ -423,11 +438,13 @@ def internode_importance(original_G, sim, stats, include_endnodes=True):
 
     imp = []  # importance
     for i in tqdm.tqdm(transmissions, desc='Transmission'):
-        imp.append(calculate_internode_importance(original_G, i['src'], i['dst']))
+        imp.append(calculate_internode_importance(original_G, i['src'], i['dst'], cutoff))
 
         # Calculate the probability including endnodes
         total = sum([imp[-1]['nodes'][n]['nodeweight'] for n in imp[-1]['nodes']])
         total2 = sum([imp[-1]['nodes'][n]['nodeweight']**2 for n in imp[-1]['nodes']])
+        #print()
+        #print(total, len([imp[-1]['nodes'][n]['nodeweight'] for n in imp[-1]['nodes']]), imp[-1]['nodes'])
         if total == 0:
             print(f'Total = 0: {imp[-1]}')
         for n in imp[-1]['nodes']:
@@ -449,7 +466,7 @@ def internode_importance(original_G, sim, stats, include_endnodes=True):
     return imp
 
 
-def get_centralities(original_G, sim, stats):
+def get_centralities(original_G, sim, stats, cutoff):
     funcs = {'betweenness': {'f': nx.centrality.betweenness_centrality, 'args': {}},
              'eigenvector': {'f': nx.centrality.eigenvector_centrality, 'args': {'max_iter': 1000}},
              'harmonic': {'f': nx.centrality.harmonic_centrality, 'args': {}},
@@ -461,7 +478,7 @@ def get_centralities(original_G, sim, stats):
     for f in tqdm.tqdm(funcs, desc='Calculate centrality'):
         centrality[f] = funcs[f]['f'](original_G, **funcs[f]['args'])
 
-    results = internode_importance(original_G, sim, stats)
+    results = internode_importance(original_G, sim, stats, cutoff)
     # pprint.pprint(centrality)
     # pprint.pprint(results)
     for i in results:
@@ -474,14 +491,14 @@ def get_centralities(original_G, sim, stats):
 
     return results
 
-def analyze_servernodes_rank(sim, original_G, stats, resultprefix):
+def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
     '''
     Find the correlation between the server nodes and various centrality measures
     '''
     fname = f'{resultprefix}_centrality.csv'
     fname_sorted = f'{resultprefix}_centrality_sorted.csv'
 
-    cent = get_centralities(original_G, sim, stats)
+    cent = get_centralities(original_G, sim, stats, cutoff)
 
     with open(fname, 'w') as f:
         f.write(f'src,dst,server,node,{",".join(cent[0]["nodes"][0])}\n')
@@ -508,6 +525,12 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix):
         t[1].to_csv(f'{resultprefix}_{groupname}.csv')
 
     df.to_csv(fname_sorted)
+
+    st = [{'src': t['src'], 'dst': t['dst'], 'server': t['server'], 'stats': t['stats']} for t in cent]
+    with open(f'{resultprefix}_stats.txt', 'w') as f:
+        #print(st)
+        json.dump(st, f)
+    
     ranks = {}
     for t in dfres:
         for r in dfres[t]['rank']:
@@ -519,7 +542,7 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix):
     return ranks
 
 
-def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, folder_results, folder_data):
+def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, folder_results, folder_data, cutoff, serverprob):
     # Topology
     
     t = Topology()
@@ -571,8 +594,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     centrality['closeness']   = nx.closeness_centrality(t.G)
     centrality['betweenness'] = nx.betweenness_centrality(t.G)
     centrality['harmonic']    = nx.harmonic_centrality(t.G)
-    
-    
+
     original_G, _ = subgraph['f'](t, **subgraph['args'])
     nx.write_gexf(t.G, f'{folder_results}/{it:04}_{subgraph["name"]}.gexf')
     nx.write_gpickle(t.G, f'{folder_results}/{it:04}_{subgraph["name"]}.pkl')
@@ -588,7 +610,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
 
     # Service placement
     # placement = FogRandomStaticPlacement(name='Placement')
-    placement = serviceplacement(name='Placement')
+    placement = serviceplacement(name='Placement', serverprob=serverprob)
     
     # Routing algorithm
     routing = DeviceSpeedAwareRouting()
@@ -614,6 +636,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     # Deploy sources
     nsources = sourcedeployment(s)
     placement.set_blocklist([s.alloc_source[i]['id'] for i in s.alloc_source])
+    # print(placement.get_blocklist())
 
     # Write statistics about this run
     rstat = {}
@@ -641,7 +664,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     # Assume no knowledge of tree structure or clustering, use the original graph
     
     # find_correlation(original_G, centrality, stats,  f'{folder_results}/{it:04}_correlation.pdf')
-    return analyze_servernodes_rank(s, original_G, stats, f'{folder_results}/{it:04}')
+    return analyze_servernodes_rank(s, original_G, stats, f'{folder_results}/{it:04}', cutoff)
 
 
 if "__main__" == __name__:
@@ -691,6 +714,9 @@ if "__main__" == __name__:
     aparse.add_argument('-s', '--source', choices=sourcedeployment.keys(), default='lowresource', help='Message source placement')
     aparse.add_argument('-u', '--subgraph', choices=subgraph.keys(), default='full', help='Subgraph for message routing in network')
     aparse.add_argument('-b', '--subargs', help='Subgraph arguments if others than defaults are given')
+    aparse.add_argument('-c', '--cutoff', default=1.1, type=float, help='The cutoff ratio for all_simple_paths function')
+    aparse.add_argument('-e', '--serverprob', default=PSERVER, type=float, help='Probability of a possible server node to become a server')
+    aparse.add_argument('-i', '--iterations', default=SIM_ITERS, type=int, help='Number of iterations')
     args = aparse.parse_args()
 
     sim_duration = SIM_DURATION
@@ -730,8 +756,11 @@ if "__main__" == __name__:
                 'sourcedeployment': {args.source: scpy[args.source]},
                 'subgraph': {args.subgraph: ucpy},
                 'datadir': args.datadir,
+                'resultdir': folder_results,
+                'cutoff': args.cutoff,
+                'serverprob': args.serverprob,
+                'iterations': args.iterations,
                 'hardcoded': {'NSOURCES': NSOURCES,
-                              'PSERVER': PSERVER,
                               'MINMEM': MINMEM,
                               'PR_gv_alpha': PR_gv_alpha,
                               'PR_gv_beta': PR_gv_beta,
@@ -745,9 +774,10 @@ if "__main__" == __name__:
                               'IPT_g_sigma': IPT_g_sigma,
                               'MEM_ev_lambd': MEM_ev_lambd,
                               'SIM_DURATION': SIM_DURATION,
-                              'SIM_ITERS': SIM_ITERS,
                               'P_SIBLING': P_SIBLING,
-                              'NCOLONIES': NCOLONIES}}
+                              'NCOLONIES': NCOLONIES,
+                              'PROBE_SIZE': PROBE_SIZE,
+                              'MIN_CUTOFF': MIN_CUTOFF}}
     # change pointers to strings
     settings['graph'][args.graph]['f'] = str(settings['graph'][args.graph]['f'])
     settings['placement'][args.placement] = str(settings['placement'][args.placement])
@@ -758,7 +788,7 @@ if "__main__" == __name__:
         json.dump(settings, f, indent=4)
 
     result = []
-    for i in range(iterations):
+    for i in range(args.iterations):
         tstart = time.time()
         result.append(main(sim_duration,
                            graphgen[args.graph],
@@ -767,7 +797,9 @@ if "__main__" == __name__:
                            subgraph[args.subgraph],
                            i,
                            folder_results,
-                           folder_data))
+                           folder_data,
+                           args.cutoff,
+                           args.serverprob))
         print(f'\n--- Iteration: {i}: {time.time() - tstart} seconds ---')
 
     print_aggregated_results_rank(result, folder_results)
