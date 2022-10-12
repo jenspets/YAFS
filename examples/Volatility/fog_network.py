@@ -375,8 +375,9 @@ def print_aggregated_results_rank(results, folder_results):
     # Create a whisker plot showing the ranks for each measure
     df = pd.DataFrame(agg)
 
-    exclude = ['nodeweight', 'prob_endnodes2', 'prob_woendnodes2']
+    exclude = ['nodeweight_rank', 'prob_endnodes2_rank', 'prob_woendnodes2_rank']
     cols = list(agg.keys())
+    print(cols, exclude)
     for e in exclude:
         cols.remove(e)
 
