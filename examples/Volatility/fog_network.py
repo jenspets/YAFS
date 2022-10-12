@@ -377,7 +377,7 @@ def print_aggregated_results_rank(results, folder_results):
 
     exclude = ['nodeweight_rank', 'prob_endnodes2_rank', 'prob_woendnodes2_rank']
     cols = list(agg.keys())
-    print(cols, exclude)
+    
     for e in exclude:
         cols.remove(e)
 
