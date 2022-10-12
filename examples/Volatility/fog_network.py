@@ -84,7 +84,7 @@ class FogRandomStaticPlacement(FogPlacement):
         actuatornodes = [x for x in sim.topology.G.nodes() if x not in self.blocklist and x not in pots]
         if not actuatornodes:
             act = random.sample(pots, 1)[0]
-            print('no elligible actuatornodes, using {act} from server nodes')
+            print(f'no elligible actuatornodes, using {act} from server nodes')
             actuatornodes = [act]
             pots.remove(act)
             
@@ -376,7 +376,7 @@ def print_aggregated_results_rank(results, folder_results):
     df = pd.DataFrame(agg)
 
     exclude = ['nodeweight', 'prob_endnodes2', 'prob_woendnodes2']
-    cols = agg.keys()
+    cols = list(agg.keys())
     for e in exclude:
         cols.remove(e)
 
@@ -535,7 +535,14 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
 
     df.to_csv(fname_sorted)
 
-    st = [{'src': t['src'], 'dst': t['dst'], 'server': t['server'], 'stats': t['stats']} for t in cent]
+    st = [{'src': t['src'],
+           'dst': t['dst'],
+           'server': t['server'],
+           'len_src_serv': nx.shortest_path_length(sim.topology.G, t['src'], t['server']),
+           'len_serv_dst': nx.shortest_path_length(sim.topology.G, t['server'], t['dst']),
+           'len_src_serv_orig': nx.shortest_path_length(original_G, t['src'], t['server']),
+           'len_serv_dst_orig': nx.shortest_path_length(original_G, t['server'], t['dst']),
+           'stats': t['stats']} for t in cent]
     with open(f'{resultprefix}_stats.txt', 'w') as f:
         #print(st)
         json.dump(st, f)
