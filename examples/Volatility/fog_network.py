@@ -372,15 +372,24 @@ def print_aggregated_results_rank(results, folder_results):
             except KeyError:
                 agg[m] = i[m]
 
-    # TODO: Create a whisker plot showing the ranks for each measure
+    # Create a whisker plot showing the ranks for each measure
     df = pd.DataFrame(agg)
-    bplot = df.boxplot(rot=90, grid=False, showmeans=True, fontsize=12)
+
+    exclude = ['nodeweight', 'prob_endnodes2', 'prob_woendnodes2']
+    cols = agg.keys()
+    for e in exclude:
+        cols.remove(e)
+
+    bplot = df.boxplot(cols, rot=90, grid=False, showmeans=True, fontsize=12)
     
     plt.savefig(f'{folder_results}/servernode_ranks.pdf', dpi=600, bbox_inches='tight')
     
-    # TODO: Write the mean, median, quartiles min and max to file and stdout
+    # Write the mean, median, quartiles min and max to file and stdout
     print(df.describe())
-    df.describe().to_csv(f'{folder_results}/servernode_ranks.csv')
+    df.describe().to_csv(f'{folder_results}/servernode_ranks_describe.csv')
+
+    # Save the dataframe for later analysis:
+    df.to_csv(f'{folder_results}/servennode_ranks.csv')
 
 
 def calculate_internode_importance(G, src, dst, cutoff):
