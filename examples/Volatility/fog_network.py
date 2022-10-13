@@ -640,6 +640,11 @@ def topo_dynamic_edges(param):
             f.write('Move;{e};{changes[e]};{topo.G.edges[changes[e]]["BW"];{topo.G.edges[changes[e]]["PR"]}\n')
 
 
+def topo_dynamic_edges_attributes(param):
+    topo_dynamic_edges(param)
+    topo_dynamic_attributes(param)
+
+
 def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topofunc, it, folder_results, folder_data, cutoff, serverprob):
     # Topology
     
@@ -830,6 +835,16 @@ if "__main__" == __name__:
                                       'pr_gv_beta': PR_gv_beta,
                                       'file': None,
                                       'filename': 'topodyn_edges.csv'},
+                             'time': T_TOPO_CHANGE},
+                'dynedgeattrib': {'f': topo_dynamic_edges_attributes,
+                             'name': 'Dynamic edge connections and edge attributes',
+                             'args': {'p_change': P_TOPO_CHANGE,
+                                      'bw_gv_alpha': BW_gv_alpha,
+                                      'bw_gv_beta': BW_gv_beta,
+                                      'pr_gv_alpha': PR_gv_alpha,
+                                      'pr_gv_beta': PR_gv_beta,
+                                      'file': None,
+                                      'filename': 'topodyn_edgeandattrib.csv'},
                              'time': T_TOPO_CHANGE}}
 
     aparse = argparse.ArgumentParser(description='Create a network, test various fog network structures')
