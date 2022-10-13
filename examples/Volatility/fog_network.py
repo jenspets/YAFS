@@ -45,6 +45,8 @@ P_SIBLING    = .5    # Probability for creating a link between siblings in a tre
 NCOLONIES    = 10    # Default number of fog colonies
 PROBE_SIZE   = 20
 MIN_CUTOFF   = 5     # minimum path length cutoff above shortest path
+P_TOPO_CHANGE = .1    # Probability of an edge attribute to change at each step
+T_TOPO_CHANGE = 90    # Time between topology changes
 
 class FogPlacement(Placement):
     '''
@@ -94,7 +96,6 @@ class FogRandomStaticPlacement(FogPlacement):
                 idDES = sim.deploy_module(app_name, module, services[module], pots)
             elif module.startswith('ACTUATOR'):
                 idDES = sim.deploy_module(app_name, module, services[module], [random.choice(actuatornodes)])
-
 
 class FogTreeSiblingConnectionPlacement(FogPlacement):
     '''
@@ -501,6 +502,14 @@ def get_centralities(original_G, sim, stats, cutoff):
 
     return results
 
+
+def get_path_len(G, src, dst):
+    if nx.has_path(G, src, dst):
+        return nx.shortest_path_length(G, src, dst)
+    else:
+        return -1
+
+
 def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
     '''
     Find the correlation between the server nodes and various centrality measures
@@ -539,10 +548,10 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
     st = [{'src': t['src'],
            'dst': t['dst'],
            'server': t['server'],
-           'len_src_serv': nx.shortest_path_length(sim.topology.G, t['src'], t['server']),
-           'len_serv_dst': nx.shortest_path_length(sim.topology.G, t['server'], t['dst']),
-           'len_src_serv_orig': nx.shortest_path_length(original_G, t['src'], t['server']),
-           'len_serv_dst_orig': nx.shortest_path_length(original_G, t['server'], t['dst']),
+           'len_src_serv': get_path_len(sim.topology.G, t['src'], t['server']),
+           'len_serv_dst': get_path_len(sim.topology.G, t['server'], t['dst']),
+           'len_src_serv_orig': get_path_len(original_G, t['src'], t['server']),
+           'len_serv_dst_orig': get_path_len(original_G, t['server'], t['dst']),
            'stats': t['stats']} for t in cent]
     with open(f'{resultprefix}_stats.txt', 'w') as f:
         #print(st)
@@ -559,7 +568,79 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
     return ranks
 
 
-def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, folder_results, folder_data, cutoff, serverprob):
+def topo_dynamic_attributes(param):
+    '''
+    Topography dynamics: Edge BW will change to account for varying RF environment and node load.
+    '''
+    topo = param['sim'].topology
+    changes = {'BW': {}, 'PR': {}}
+    
+    for e in topo.G.edges:
+        if random.random() < param['p_change']:
+            topo.G.edges[e]['BW'] = changes['BW'][e] = random.gammavariate(param['bw_gv_alpha'], param['bw_gv_beta'])
+        if random.random() < param['p_change']:
+            topo.G.edges[e]['PR'] = changes['PR'][e] = random.gammavariate(param['pr_gv_alpha'], param['bw_gv_beta'])
+
+    f = param['file']
+    if f:
+        for e in changes['PR']:
+            f.write(f'Change;PR;{e};{changes["PR"][e]}\n')
+        for e in changes['BW']:
+            f.write(f'Change;BW;{e};{changes["BW"][e]}\n')
+
+
+def get_new_neighbor(G, node):
+    '''
+    Find a new neighbor that is not present among the nodes neighbors
+    '''
+    possible_neighbors = list(G.nodes)
+    possible_neighbors.remove(node)
+    for n in nx.neighbors(G, node):
+        possible_neighbors.remove(n)
+
+    if len(possible_neighbors) == 0:
+        print(f'Node {node} connected to all nodes')
+        return None
+
+    return random.sample(possible_neighbors, 1)[0]
+
+
+def topo_dynamic_edges(param):
+    '''
+    Topograpy dynamics: Edges will be removed, and new edge will be attached to another node to account for movement.
+    '''
+    topo = param['sim'].topology
+    changes = {}
+
+    for n in topo.G.nodes:
+        if random.random() < param['p_change']:
+            edges = list(nx.edges(topo.G, n))
+            new_edge = (n, get_new_neighbor(topo.G, n))
+            changes[random.sample(edges, 1)[0]] = new_edge
+
+    rem = []
+    # delete edges and add new ones
+    for e in changes:
+        # Remove double entries in this list, as (node1, node2) and (node2, node1) might both be in list
+        if (e[1], e[0]) in changes:
+            rem.append(e)
+            continue
+        print(list(nx.edges(topo.G, e[0])), e)
+        topo.G.remove_edge(e[0], e[1])
+        topo.G.add_edge(changes[e][0], changes[e][1])
+        topo.G.edges[changes[e]]['BW'] = random.gammavariate(param['bw_gv_alpha'], param['bw_gv_beta'])
+        topo.G.edges[changes[e]]['PR'] = random.gammavariate(param['pr_gv_alpha'], param['pr_gv_beta'])
+
+    for e in rem:
+        changes.pop(e)
+
+    f = param['file']
+    if f:
+        for e in changes:
+            f.write('Move;{e};{changes[e]};{topo.G.edges[changes[e]]["BW"];{topo.G.edges[changes[e]]["PR"]}\n')
+
+
+def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topofunc, it, folder_results, folder_data, cutoff, serverprob):
     # Topology
     
     t = Topology()
@@ -620,7 +701,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
         f.write('Edge;PR;BW\n')
         for e in t.G.edges():
             f.write(f'{e};{t.G.edges()[e]["PR"]};{t.G.edges()[e]["BW"]}\n')
-    
+
     # Application
     japp = json.load(open(f'{folder_data}/appDef.json'))
     apps = create_applications_from_json(japp)
@@ -654,6 +735,14 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, it, 
     nsources = sourcedeployment(s)
     placement.set_blocklist([s.alloc_source[i]['id'] for i in s.alloc_source])
     # print(placement.get_blocklist())
+
+    # Add a monitor for updating the network topology
+    if topofunc:
+        topofunc['args']['sim'] = s
+        if topofunc['args']['filename']:
+            topofunc['args']['file'] = open(f'{folder_results}/{it:04}_{topofunc["args"]["filename"]}', 'w')
+        topodist = deterministic_distribution(topofunc['time'], name='Deterministic topo update')
+        s.deploy_monitor('Topology update', topofunc['f'], topodist, param=topofunc['args'])
 
     # Write statistics about this run
     rstat = {}
@@ -721,6 +810,27 @@ if "__main__" == __name__:
                                     'cloudpr': (PRC_gv_alpha, PRC_gv_beta),
                                     'cloudbw': (BWC_gv_alpha, BWC_gv_beta),
                                     'cloudattr': {'IPT': 1E9, 'MEM': 1E9}}}}
+    topofunc = {'static': None,
+                'dynattrib': {'f': topo_dynamic_attributes,
+                              'name': 'Dynamic attributes', 
+                              'args': {'p_change': P_TOPO_CHANGE,
+                                       'bw_gv_alpha': BW_gv_alpha,
+                                       'bw_gv_beta': BW_gv_beta,
+                                       'pr_gv_alpha': PR_gv_alpha,
+                                       'pr_gv_beta': PR_gv_beta,
+                                       'file': None,
+                                       'filename': 'topodyn_attribs.csv'},
+                              'time': T_TOPO_CHANGE},
+                'dynedges': {'f': topo_dynamic_edges,
+                             'name': 'Dynamic edge connections',
+                             'args': {'p_change': P_TOPO_CHANGE,
+                                      'bw_gv_alpha': BW_gv_alpha,
+                                      'bw_gv_beta': BW_gv_beta,
+                                      'pr_gv_alpha': PR_gv_alpha,
+                                      'pr_gv_beta': PR_gv_beta,
+                                      'file': None,
+                                      'filename': 'topodyn_edges.csv'},
+                             'time': T_TOPO_CHANGE}}
 
     aparse = argparse.ArgumentParser(description='Create a network, test various fog network structures')
     aparse.add_argument('-r', '--results', default='results', help='Directory to store results')
@@ -734,6 +844,8 @@ if "__main__" == __name__:
     aparse.add_argument('-c', '--cutoff', default=1.1, type=float, help='The cutoff ratio for all_simple_paths function')
     aparse.add_argument('-e', '--serverprob', default=PSERVER, type=float, help='Probability of a possible server node to become a server')
     aparse.add_argument('-i', '--iterations', default=SIM_ITERS, type=int, help='Number of iterations')
+    aparse.add_argument('-t', '--topofunc', choices=topofunc.keys(), default='static', type=str, help='Function for topology changes during simulation run')
+    aparse.add_argument('-v', '--topoargs', help='Topography dynamics function arguments, given as json object')
     args = aparse.parse_args()
 
     sim_duration = SIM_DURATION
@@ -757,21 +869,32 @@ if "__main__" == __name__:
         a = json.loads(args.subargs)
         for e in a:
             subgraph[args.subgraph]['args'][e] = a[e]
-            
+
+    if args.topoargs:
+        a =json.loads(args.topoargs)
+        for e in a:
+            topofunc[args.topofunc]['args'][e] = a[e]
+
     print(f'Parameters: Graph generator   = {graphgen[args.graph]["name"]}, args = {graphgen[args.graph]["args"]}')
     print(f'            Placement         = {args.placement}')
     print(f'            Source deployment = {args.source}')
     print(f'            Subgraph          = {subgraph[args.subgraph]["name"]}, args = {subgraph[args.subgraph]["args"]}')
+    if topofunc[args.topofunc]:
+        print(f'            Topology dynamic  = {topofunc[args.topofunc]["name"]}, args = {topofunc[args.topofunc]["args"]}, time = {topofunc[args.topofunc]["time"]}')
+    else:
+        print('            Topology dynamic: = None')
 
     gcpy = graphgen[args.graph].copy()
     pcpy = placement.copy()
     scpy = sourcedeployment.copy()
     ucpy = subgraph[args.subgraph].copy()
+    tcpy = topofunc[args.topofunc].copy()
     
     settings = {'graph': {args.graph: gcpy},
                 'placement': {args.placement: pcpy[args.placement]},
                 'sourcedeployment': {args.source: scpy[args.source]},
                 'subgraph': {args.subgraph: ucpy},
+                'topofunc': {args.topofunc: tcpy},
                 'datadir': args.datadir,
                 'resultdir': folder_results,
                 'cutoff': args.cutoff,
@@ -800,6 +923,7 @@ if "__main__" == __name__:
     settings['placement'][args.placement] = str(settings['placement'][args.placement])
     settings['sourcedeployment'][args.source] = str(settings['sourcedeployment'][args.source])
     settings['subgraph'][args.subgraph]['f'] = str(settings['subgraph'][args.subgraph]['f'])
+    settings['topofunc'][args.topofunc]['f'] = str(settings['topofunc'][args.topofunc]['f'])
     
     with open(f'{args.results}/settings.json', 'w') as f:
         json.dump(settings, f, indent=4)
@@ -812,6 +936,7 @@ if "__main__" == __name__:
                            placement[args.placement],
                            sourcedeployment[args.source],
                            subgraph[args.subgraph],
+                           topofunc[args.topofunc],
                            i,
                            folder_results,
                            folder_data,
