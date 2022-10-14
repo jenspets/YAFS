@@ -909,7 +909,10 @@ if "__main__" == __name__:
     pcpy = placement.copy()
     scpy = sourcedeployment.copy()
     ucpy = subgraph[args.subgraph].copy()
-    tcpy = topofunc[args.topofunc].copy()
+    if topofunc[args.topofunc]:
+        tcpy = topofunc[args.topofunc].copy()
+    else:
+        tcpy = None
     
     settings = {'graph': {args.graph: gcpy},
                 'placement': {args.placement: pcpy[args.placement]},
@@ -944,7 +947,8 @@ if "__main__" == __name__:
     settings['placement'][args.placement] = str(settings['placement'][args.placement])
     settings['sourcedeployment'][args.source] = str(settings['sourcedeployment'][args.source])
     settings['subgraph'][args.subgraph]['f'] = str(settings['subgraph'][args.subgraph]['f'])
-    settings['topofunc'][args.topofunc]['f'] = str(settings['topofunc'][args.topofunc]['f'])
+    if settings['topofunc'][args.topofunc]:
+        settings['topofunc'][args.topofunc]['f'] = str(settings['topofunc'][args.topofunc]['f'])
     
     with open(f'{args.results}/settings.json', 'w') as f:
         json.dump(settings, f, indent=4)
