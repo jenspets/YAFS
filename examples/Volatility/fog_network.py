@@ -616,17 +616,23 @@ def topo_dynamic_edges(param):
         if random.random() < param['p_change']:
             edges = list(nx.edges(topo.G, n))
             new_edge = (n, get_new_neighbor(topo.G, n))
-            changes[random.sample(edges, 1)[0]] = new_edge
+            if len(edges) > 0: 
+                changes[random.sample(edges, 1)[0]] = new_edge
+            else:
+                # node without edges
+                changes[(n, n)] = new_edge
 
     rem = []
     # delete edges and add new ones
     for e in changes:
         # Remove double entries in this list, as (node1, node2) and (node2, node1) might both be in list
-        if (e[1], e[0]) in changes:
+        if e[0] != e[1] and (e[1], e[0]) in changes:
             rem.append(e)
             continue
         print(list(nx.edges(topo.G, e[0])), e)
-        topo.G.remove_edge(e[0], e[1])
+        if e[0] != e[1]:
+            # edge exists
+            topo.G.remove_edge(e[0], e[1])
         topo.G.add_edge(changes[e][0], changes[e][1])
         topo.G.edges[changes[e]]['BW'] = random.gammavariate(param['bw_gv_alpha'], param['bw_gv_beta'])
         topo.G.edges[changes[e]]['PR'] = random.gammavariate(param['pr_gv_alpha'], param['pr_gv_beta'])
