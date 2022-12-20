@@ -48,6 +48,7 @@ MIN_CUTOFF   = 5     # minimum path length cutoff above shortest path
 P_TOPO_CHANGE = .1    # Probability of an edge attribute to change at each step
 T_TOPO_CHANGE = 90    # Time between topology changes
 
+
 class FogPlacement(Placement):
     '''
     A superclass for common functionality between service placement methods
@@ -67,13 +68,12 @@ class FogPlacement(Placement):
 
 class FogRandomStaticPlacement(FogPlacement):
     '''
-    The class places services at random nodes that have minimum required MEM configuration. 
+    The class places services at random nodes that have minimum required MEM configuration.
     '''
 
     def initial_allocation(self, sim, app_name):
         app = sim.apps[app_name]
         services = app.services
-        #pserver = PSERVER
         pots = []
         minmem = MINMEM    # Min 1 GB MEM
 
@@ -89,7 +89,10 @@ class FogRandomStaticPlacement(FogPlacement):
             print(f'no elligible actuatornodes, using {act} from server nodes')
             actuatornodes = [act]
             pots.remove(act)
-            
+
+        print(f'blocklist: {self.blocklist}')
+        print(f'servers: {pots}')
+        print(f'actuator: {actuatornodes}')
         # print(f'Server nodes for {app_name} ({len(pots)}): {pots}')
         for module in services.keys():
             if module.startswith('SERVICE'):
@@ -97,9 +100,10 @@ class FogRandomStaticPlacement(FogPlacement):
             elif module.startswith('ACTUATOR'):
                 idDES = sim.deploy_module(app_name, module, services[module], [random.choice(actuatornodes)])
 
+
 class FogTreeSiblingConnectionPlacement(FogPlacement):
     '''
-    The class generate a tree structure from the network, with connections between siblings. 
+    The class generate a tree structure from the network, with connections between siblings.
     The service is placed in all nodes that have minimum requirements, and that is not a leaf node
     '''
 
@@ -107,18 +111,28 @@ class FogTreeSiblingConnectionPlacement(FogPlacement):
         app = sim.apps[app_name]
         services = app.services
         minmem = MINMEM
-        #pserver = PSERVER
         serverlist = []
 
         # Select nodes to act as servers
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
-            if mem > minmem and sim.topology.G.degree(n) > 1 and random.random() <= self.serverprob:
+            if mem > minmem and sim.topology.G.degree(n) > 1 and random.random() <= self.serverprob and n not in self.blocklist:
                 serverlist.append(n)
+
+        actuatornodes = [x for x in sim.topology.G.nodes() if x not in self.blocklist and x not in serverlist]
+        if not actuatornodes:
+            acct = random.sample(serverlist, 1)[0]
+            print(f'No illegible actuator nodes, using {act} from server nodes')
+            actuatornodes = [act]
+            serverlist.remove(act)
 
         print(f'Server nodes ({len(serverlist)}): {serverlist}')
         for module in services.keys():
-            idDES = sim.deploy_module(app_name, module, services[module], serverlist)
+            if module.startswith('SERVICE'):
+                idDES = sim.deploy_module(app_name, module, services[module], serverlist)
+            elif module.startswith('ACTUATOR'):
+                idDES = sim.deploy_module(app_name, module, services[module], [random.choice(actuatornodes)])
+
 
 class FogColonyPlacement(FogPlacement):
     '''
@@ -131,23 +145,33 @@ class FogColonyPlacement(FogPlacement):
         app = sim.apps[app_name]
         services = app.services
         minmem = MINMEM
-        # pserver = PSERVER
         serverlist = []
 
         for n in sim.topology.G.nodes():
             mem = sim.topology.G.nodes()[n]['MEM']
             controller = sim.topology.G.nodes()[n]['CONTROLLER']
-            if n != controller and mem > minmem and random.random() <= self.serverprob:
+            if n != controller and mem > minmem and random.random() <= self.serverprob and n not in self.blocklist:
                 serverlist.append(n)
 
-        print(f'Server nodes ({len(serverlist)}): {serverlist}')
+        # print(f'servers right after: {serverlist}')
+        actuatornodes = [x for x in sim.topology.G.nodes() if x not in self.blocklist and x not in serverlist]
+        if not actuatornodes:
+            act = random.sample(serverlist, 1)[0]
+            print(f'No illegible actuator nodes, using {act} from server nodes')
+            actuatornodes = [act]
+            serverlist.remove(act)
+
+        # print(f'Server nodes ({len(serverlist)}): {serverlist}')
         for module in services.keys():
-            idDES = sim.deploy_module(app_name, module, services[module], serverlist)
+            if module.startswith('SERVICE'):
+                idDES = sim.deploy_module(app_name, module, services[module], serverlist)
+            elif module.startswith('ACTUATOR'):
+                idDES = sim.deploy_module(app_name, module, services[module], [random.choice(actuatornodes)])
 
 
 def deploy_random_lowresource_sources(sim):
     '''
-    Deploy a number of sources, at the most memory constrained nodes, each with a message sending distribution. 
+    Deploy a number of sources, at the most memory constrained nodes, each with a message sending distribution.
     '''
     nsources = int(nx.number_of_nodes(sim.topology.G) * NSOURCES)
     print(f'Number of sources: {nsources}')
@@ -155,6 +179,9 @@ def deploy_random_lowresource_sources(sim):
     psources = [x for x in sorted(sim.topology.G.nodes(), key=lambda x: sim.topology.G.nodes()[x]['MEM'])][:nsources]
 
     for a in sim.apps:
+        for p in sim.placement_policy:
+            if a in sim.placement_policy[p]['apps']:
+                sim.placement_policy[p]['placement_policy'].set_blocklist(psources)
         for i in psources:
             # Select a random message from app
             msg = sim.apps[a].get_message(random.sample(sorted(sim.apps[a].messages), 1)[0])
@@ -164,7 +191,7 @@ def deploy_random_lowresource_sources(sim):
     return nsources
 
 
-# TODO: Check the assumption about sources in GW is correct... 
+# TODO: Check the assumption about sources in GW is correct...
 def deploy_colony_sources(sim):
     '''
     Deploy source in the service orchestration nodes, simulating a gateway or node contacting this node directly.
@@ -173,6 +200,9 @@ def deploy_colony_sources(sim):
     psources = [x for x in sorted(sim.topology.G.nodes(), key=lambda x: sim.topology.G.nodes()[x]['MEM']) if sim.topology.G.nodes()[x]['CONTROLLER'] == x][:nsources]
 
     for a in sim.apps:
+        for p in sim.placement_policy:
+            if a in sim.placement_policy[p]['apps']:
+                sim.placement_policy[p]['placement_policy'].set_blocklist(psources)
         for n in psources:
             msg = sim.apps[a].get_message(random.sample(sorted(sim.apps[a].messages), 1)[0])
             dist = deterministic_distribution(100, name='Deterministic')
@@ -191,7 +221,7 @@ def deploy_leaf_nodes_sources(sim):
     maxdeg = max(nx.degree(sim.topology.G), key=lambda x: x[1])[1]
     while len(psources) < nsources:
         print(f'Too few sources with degree {deg}, increasing maximum degree. len(psources) = {len(psources)}/{nsources}')
-        deg += 1 
+        deg += 1
         psources = [x for x in sim.topology.G.nodes() if sim.topology.G.degree(x) <= deg]
         if deg > maxdeg:
             print(f'Reached max degree without finding enough nodes: {maxdeg}')
@@ -200,6 +230,9 @@ def deploy_leaf_nodes_sources(sim):
     psources = psources[:nsources]
 
     for a in sim.apps:
+        for p in sim.placement_policy:
+            if a in sim.placement_policy[p]['apps']:
+                sim.placement_policy[p]['placement_policy'].set_blocklist(psources)
         for i in psources:
             msg = sim.apps[a].get_message(random.sample(sorted(sim.apps[a].messages), 1)[0])
             dist = deterministic_distribution(100, name='Deterministic')
@@ -214,8 +247,8 @@ def connect_children(tree, graph, grandp, parent, p):
     As the graph is undirected, exclude the grandparent node.
     '''
     n = list(tree.neighbors(parent))
-    
-    if grandp != None:
+
+    if grandp is not None:
         n.remove(grandp)
     # print(n, grandp, parent)
     if len(n) <= 1:
@@ -225,16 +258,12 @@ def connect_children(tree, graph, grandp, parent, p):
     for e in itertools.combinations(n, 2):
         if graph.has_edge(*e) and random.random() < p:
             edges.append(e)
-    # print(edges)
-    # tree.add_edges_from(edges)
-    # attr = {edge: {'PR': graph.edges[edge[0], edge[1]]['PR'], 'BW': graph.edges[edge[0], edge[1]]['BW']} for edge in edges}
-    # attr = {edge: {'PR': 1, 'BW': 1} for edge in edges}
-    # nx.set_edge_attributes(tree, attr)
 
     for child in n:
         edges.extend(connect_children(tree, graph, parent, child, p))
 
     return edges
+
 
 def subgraph_tree(topology, p):
     original_G = topology.G.copy()
@@ -243,17 +272,15 @@ def subgraph_tree(topology, p):
     #     print(f'Node: {n}: {stg.nodes()[n]}')
     # for e in stg.edges():
     #     print(f'Edge: {e}: {stg.edges()[e]}')
-    
+
     # find center, and add connection between children, using the supplied parameters for the gamma distribution
     center = nx.center(stg)[0]
 
-    # TODO: This should copy existing edges, not create new ones
-    # add_sibling_edge(stg, center, set([center]), p, pr, bw, 0)
     edges = connect_children(stg, original_G, None, center, p)
     stg.add_edges_from(edges)
     attr = {edge: {'PR': original_G.edges[edge]['PR'], 'BW': original_G.edges[edge]['BW']} for edge in edges}
     nx.set_edge_attributes(stg, attr)
-    
+
     topology.G = stg
     return original_G, stg
 
@@ -294,7 +321,7 @@ def subgraph_colony(topology, ncolonies, cloudpr, cloudbw, cloudattr):
 
     # Remove all edges that crosses cluster
     for n in topology.G.nodes:
-        if iscontr[n] == False:
+        if not iscontr[n]:
             for nn in list(topology.G.neighbors(n)):
                 if closecontr[n] != closecontr[nn]:
                     print(f'remove edge: {(n, nn)} {topology.G.edges()[(n,nn)]} {topology.G.nodes()[n]} {topology.G.nodes()[nn]}')
@@ -324,7 +351,7 @@ def find_correlation(graph, centrality, stats, filename):
     for s in servs:
         dserv[s] = True
     print(f'Number of actual server nodes: {len(servs)} {servs}')
-    
+
     # Plot the histogram of number of servers in centrality intervals
 
     fig = plt.figure()
@@ -340,7 +367,7 @@ def find_correlation(graph, centrality, stats, filename):
         else:
             centrality_scaled = [centrality[c][x] for x in centrality[c]]
         centrality_scaled, l = spstats.boxcox(centrality_scaled)
-        
+
         cent = [centrality_scaled[n] for n in dserv if dserv[n]]
         nodes = [centrality_scaled[n] for n in dserv if not dserv[n]]
         ax.append(fig.add_subplot(ncent, 3, i))
@@ -357,7 +384,7 @@ def find_correlation(graph, centrality, stats, filename):
     plt.savefig(filename)
 
     fig = plt.figure()
-    
+
 
 def print_aggregated_results_rank(results, folder_results):
     '''
@@ -365,7 +392,6 @@ def print_aggregated_results_rank(results, folder_results):
     '''
     agg = {}
 
-    #print(results)
     for i in results:
         for m in i:
             try:
@@ -378,14 +404,15 @@ def print_aggregated_results_rank(results, folder_results):
 
     exclude = ['nodeweight_rank', 'prob_endnodes2_rank', 'prob_woendnodes2_rank']
     cols = list(agg.keys())
-    
+
     for e in exclude:
-        cols.remove(e)
+        if e in cols:
+            cols.remove(e)
 
     bplot = df.boxplot(cols, rot=90, grid=False, showmeans=True, fontsize=12)
-    
+
     plt.savefig(f'{folder_results}/servernode_ranks.pdf', dpi=600, bbox_inches='tight')
-    
+
     # Write the mean, median, quartiles min and max to file and stdout
     print(df.describe())
     df.describe().to_csv(f'{folder_results}/servernode_ranks_describe.csv')
@@ -403,7 +430,7 @@ def calculate_internode_importance(G, src, dst, cutoff):
     shortestpath = nx.shortest_path_length(G, src, dst)
     co = max(shortestpath*math.ceil(cutoff), MIN_CUTOFF)
     paths = list(nx.all_simple_paths(G, src, dst, cutoff=co))
-    #for path in tqdm.tqdm(map(nx.utils.pairwise, paths), desc='Calculate edge weights'):
+
     for path in map(nx.utils.pairwise, paths):
         w = 1/sum([G.edges[x]['PR'] + PROBE_SIZE/G.edges[x]['BW'] for x in path])
         wsums.append(w)
@@ -454,17 +481,19 @@ def internode_importance(original_G, sim, stats, cutoff, include_endnodes=True):
         # Calculate the probability including endnodes
         total = sum([imp[-1]['nodes'][n]['nodeweight'] for n in imp[-1]['nodes']])
         total2 = sum([imp[-1]['nodes'][n]['nodeweight']**2 for n in imp[-1]['nodes']])
-        #print()
-        #print(total, len([imp[-1]['nodes'][n]['nodeweight'] for n in imp[-1]['nodes']]), imp[-1]['nodes'])
+
         if total == 0:
+            print()
             print(f'Total = 0: {imp[-1]}')
         for n in imp[-1]['nodes']:
             imp[-1]['nodes'][n]['prob_endnodes'] = imp[-1]['nodes'][n]['nodeweight']/total
             imp[-1]['nodes'][n]['prob_endnodes2'] = imp[-1]['nodes'][n]['nodeweight']**2/total2
-        #print(imp[-1])
+        # print()
+        # print(imp[-1])
         total = sum([imp[-1]['nodes'][n]['nodeweight'] for n in imp[-1]['nodes'] if n != i['src'] and n != i['dst']])
         total2 = sum([imp[-1]['nodes'][n]['nodeweight']**2 for n in imp[-1]['nodes'] if n != i['src'] and n != i['dst']])
         for n in imp[-1]['nodes']:
+            # print(n, imp[-1]['nodes'][n])
             imp[-1]['nodes'][n]['prob_woendnodes'] = imp[-1]['nodes'][n]['nodeweight']/total
             imp[-1]['nodes'][n]['prob_woendnodes2'] = imp[-1]['nodes'][n]['nodeweight']**2/total2
         imp[-1]['nodes'][i['src']]['prob_woendnodes'] = imp[-1]['nodes'][i['dst']]['prob_woendnodes'] = -1
@@ -479,13 +508,13 @@ def internode_importance(original_G, sim, stats, cutoff, include_endnodes=True):
 
 def get_centralities(original_G, sim, stats, cutoff):
     funcs = {'betweenness': {'f': nx.centrality.betweenness_centrality, 'args': {}},
-             'eigenvector': {'f': nx.centrality.eigenvector_centrality, 'args': {'max_iter': 1000}},
+             'eigenvector': {'f': nx.centrality.eigenvector_centrality, 'args': {'max_iter': 10000}},
              'harmonic': {'f': nx.centrality.harmonic_centrality, 'args': {}},
              'closeness': {'f': nx.centrality.closeness_centrality, 'args': {}},
              'degree': {'f': nx.centrality.degree_centrality, 'args': {}}}
 
     centrality = dict()
-    
+
     for f in tqdm.tqdm(funcs, desc='Calculate centrality'):
         centrality[f] = funcs[f]['f'](original_G, **funcs[f]['args'])
 
@@ -529,14 +558,14 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
     dfres = {}
     # Find the percentile the server is in for each of the measures, compare with distribution
     # Are there any discernable peaks that are associated with the servers?
-    measures = ['prob_endnodes', 'prob_endnodes2', 'prob_woendnodes', 'prob_woendnodes2', 'betweenness','closeness', 'degree', 'eigenvector', 'harmonic', 'nodeweight']
+    measures = ['prob_endnodes', 'prob_endnodes2', 'betweenness','closeness', 'degree', 'eigenvector', 'harmonic', 'nodeweight']
     for t in df.groupby(['src', 'server', 'dst']):
         dfres[t[0]] = {'value': {}, 'rank': {}}
         for m in measures:
             rcol = f'{m}_rank'
             t[1][rcol] = t[1][m].rank(method='min', ascending=False)
             groupname = f'{t[0][0]}-{t[0][1]}-{t[0][2]}'
-
+            print(t[1])
             dfres[t[0]]['value'][m] = t[1][t[1]['node'] == t[1]['server']][m].values[0]
             dfres[t[0]]['rank'][rcol] = t[1][t[1]['node'] == t[1]['server']][rcol].values[0]
 
@@ -554,13 +583,12 @@ def analyze_servernodes_rank(sim, original_G, stats, resultprefix, cutoff):
            'len_serv_dst_orig': get_path_len(original_G, t['server'], t['dst']),
            'stats': t['stats']} for t in cent]
     with open(f'{resultprefix}_stats.txt', 'w') as f:
-        #print(st)
         json.dump(st, f)
-    
+
     ranks = {}
     for t in dfres:
         for r in dfres[t]['rank']:
-            try: 
+            try:
                 ranks[r].append(dfres[t]['rank'][r])
             except KeyError:
                 ranks[r] = [dfres[t]['rank'][r]]
@@ -574,7 +602,7 @@ def topo_dynamic_attributes(param):
     '''
     topo = param['sim'].topology
     changes = {'BW': {}, 'PR': {}}
-    
+
     for e in topo.G.edges:
         if random.random() < param['p_change']:
             topo.G.edges[e]['BW'] = changes['BW'][e] = random.gammavariate(param['bw_gv_alpha'], param['bw_gv_beta'])
@@ -616,7 +644,7 @@ def topo_dynamic_edges(param):
         if random.random() < param['p_change']:
             edges = list(nx.edges(topo.G, n))
             new_edge = (n, get_new_neighbor(topo.G, n))
-            if len(edges) > 0: 
+            if len(edges) > 0:
                 changes[random.sample(edges, 1)[0]] = new_edge
             else:
                 # node without edges
@@ -653,40 +681,40 @@ def topo_dynamic_edges_attributes(param):
 
 def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topofunc, it, folder_results, folder_data, cutoff, serverprob):
     # Topology
-    
+
     t = Topology()
     t.G = graphgen['f'](**graphgen['args'])
     # t.G = nx.generators.random_internet_as_graph(100)
 
     fe = open(f'{folder_results}/{it:04}_edges.csv', 'w')
     fn = open(f'{folder_results}/{it:04}_nodes.csv', 'w')
-    
+
     # Set the attributes of the edges and nodes
     # attrPR_BW = {x: 1 for x in t.G.edges()}
     # nx.set_edge_attributes(t.G, name='PR', values=attrPR_BW)
     # nx.set_edge_attributes(t.G, name='BW', values=attrPR_BW)
 
     # Latency for edge is: message_size/(BW * 1E6) + PR
-    attrPR = {x: random.gammavariate(PR_gv_alpha, PR_gv_beta) for x in t.G.edges} # Gives mostly valuse between 0 and 1 second
+    attrPR = {x: random.gammavariate(PR_gv_alpha, PR_gv_beta) for x in t.G.edges}  # Gives mostly valuse between 0 and 1 second
     attrBW = {x: random.gammavariate(BW_gv_alpha, BW_gv_beta) for x in t.G.edges}  # BW given in Mb/s
     nx.set_edge_attributes(t.G, name='PR', values=attrPR)
     nx.set_edge_attributes(t.G, name='BW', values=attrBW)
-    #print('PR and BW')
+
     fe.write('Edge;PR;BW\n')
     for e in t.G.edges():
         #print(f'e: {e}, PR: {t.G.edges()[e]["PR"]} BW: {t.G.edges()[e]["BW"]}')
         fe.write(f'{e};{t.G.edges()[e]["PR"]};{t.G.edges()[e]["BW"]}\n')
     fe.close()
- 
+
     attrIPT = {x: abs(random.gauss(IPT_g_mu, IPT_g_sigma)) for x in t.G.nodes()}
     nx.set_node_attributes(t.G, name='IPT', values=attrIPT)
-    
+
     # MEM (in MB) set at random from a n.e.d. 1E-4 gives very few at 100G, avg at 10G
     attrMEM = {x: int(random.expovariate(MEM_ev_lambd)) for x in t.G.nodes()}
     nx.set_node_attributes(t.G, name='MEM', values=attrMEM)
-    #plt.hist([attrMEM[x] for x in attrMEM])
-    #plt.show()
-    #pprint.pprint(attrMEM)
+    # plt.hist([attrMEM[x] for x in attrMEM])
+    # plt.show()
+    # rpprint.pprint(attrMEM)
     # print('IPT and MEM')
     fn.write('Node;IPT;MEM\n')
     for n in t.G.nodes():
@@ -699,7 +727,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
 
     centrality = dict()
     centrality['degree']      = nx.degree_centrality(t.G)
-    centrality['eigenvector'] = nx.eigenvector_centrality(t.G, max_iter=1000)
+    centrality['eigenvector'] = nx.eigenvector_centrality(t.G, max_iter=10000)
     centrality['closeness']   = nx.closeness_centrality(t.G)
     centrality['betweenness'] = nx.betweenness_centrality(t.G)
     centrality['harmonic']    = nx.harmonic_centrality(t.G)
@@ -720,7 +748,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
     # Service placement
     # placement = FogRandomStaticPlacement(name='Placement')
     placement = serviceplacement(name='Placement', serverprob=serverprob)
-    
+
     # Routing algorithm
     routing = DeviceSpeedAwareRouting()
 
@@ -734,7 +762,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
         volatility[a].set_unlinkdistr(1/300, vtype=Volatility.SOURCE)
         volatility[a].set_unlinkdistr(1/300, vtype=Volatility.PROXY)
         volatility[a].set_unlinkdistr(1/300, vtype=Volatility.SINK)
-    
+
     # Simulation
     s = Sim(t, default_results_path=f'{folder_results}/{it:04}_sim_trace')
 
@@ -761,10 +789,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
     rstat['n_edges_orig']        = nx.number_of_edges(original_G)
     rstat['n_edges']             = nx.number_of_edges(t.G)
     rstat['n_sources']           = nsources
-    #rstat['n_potential_src']     = 0
-    #rstat['n_destinations']      = 0
-    #rstat['n_servers']           = 0
-    #rstat['n_potential_servers'] = 0
+
     with open(f'{folder_results}/{it:04}_iterationstats.json', 'w') as f:
         json.dump(rstat, f, indent=4)
 
@@ -779,8 +804,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
 
     # Correlation between server nodes and graph measures
     # Assume no knowledge of tree structure or clustering, use the original graph
-    
-    # find_correlation(original_G, centrality, stats,  f'{folder_results}/{it:04}_correlation.pdf')
+
     return analyze_servernodes_rank(s, original_G, stats, f'{folder_results}/{it:04}', cutoff)
 
 
@@ -804,7 +828,7 @@ if "__main__" == __name__:
     placement = {'randomstatic': FogRandomStaticPlacement,
                  'treesibling': FogTreeSiblingConnectionPlacement,
                  'colony': FogColonyPlacement}
-    
+
     sourcedeployment = {'lowresource': deploy_random_lowresource_sources,
                         'leafnodes': deploy_leaf_nodes_sources,
                         'colony': deploy_colony_sources}
@@ -823,7 +847,7 @@ if "__main__" == __name__:
                                     'cloudattr': {'IPT': 1E9, 'MEM': 1E9}}}}
     topofunc = {'static': None,
                 'dynattrib': {'f': topo_dynamic_attributes,
-                              'name': 'Dynamic attributes', 
+                              'name': 'Dynamic attributes',
                               'args': {'p_change': P_TOPO_CHANGE,
                                        'bw_gv_alpha': BW_gv_alpha,
                                        'bw_gv_beta': BW_gv_beta,
@@ -843,15 +867,15 @@ if "__main__" == __name__:
                                       'filename': 'topodyn_edges.csv'},
                              'time': T_TOPO_CHANGE},
                 'dynedgeattrib': {'f': topo_dynamic_edges_attributes,
-                             'name': 'Dynamic edge connections and edge attributes',
-                             'args': {'p_change': P_TOPO_CHANGE,
-                                      'bw_gv_alpha': BW_gv_alpha,
-                                      'bw_gv_beta': BW_gv_beta,
-                                      'pr_gv_alpha': PR_gv_alpha,
-                                      'pr_gv_beta': PR_gv_beta,
-                                      'file': None,
-                                      'filename': 'topodyn_edgeandattrib.csv'},
-                             'time': T_TOPO_CHANGE}}
+                                  'name': 'Dynamic edge connections and edge attributes',
+                                  'args': {'p_change': P_TOPO_CHANGE,
+                                           'bw_gv_alpha': BW_gv_alpha,
+                                           'bw_gv_beta': BW_gv_beta,
+                                           'pr_gv_alpha': PR_gv_alpha,
+                                           'pr_gv_beta': PR_gv_beta,
+                                           'file': None,
+                                           'filename': 'topodyn_edgeandattrib.csv'},
+                                  'time': T_TOPO_CHANGE}}
 
     aparse = argparse.ArgumentParser(description='Create a network, test various fog network structures')
     aparse.add_argument('-r', '--results', default='results', help='Directory to store results')
@@ -892,7 +916,7 @@ if "__main__" == __name__:
             subgraph[args.subgraph]['args'][e] = a[e]
 
     if args.topoargs:
-        a =json.loads(args.topoargs)
+        a = json.loads(args.topoargs)
         for e in a:
             topofunc[args.topofunc]['args'][e] = a[e]
 
@@ -909,11 +933,11 @@ if "__main__" == __name__:
     pcpy = placement.copy()
     scpy = sourcedeployment.copy()
     ucpy = subgraph[args.subgraph].copy()
-    if topofunc[args.topofunc]:
+    if args.topofunc != 'static':
         tcpy = topofunc[args.topofunc].copy()
     else:
         tcpy = None
-    
+
     settings = {'graph': {args.graph: gcpy},
                 'placement': {args.placement: pcpy[args.placement]},
                 'sourcedeployment': {args.source: scpy[args.source]},
@@ -949,7 +973,7 @@ if "__main__" == __name__:
     settings['subgraph'][args.subgraph]['f'] = str(settings['subgraph'][args.subgraph]['f'])
     if settings['topofunc'][args.topofunc]:
         settings['topofunc'][args.topofunc]['f'] = str(settings['topofunc'][args.topofunc]['f'])
-    
+
     with open(f'{args.results}/settings.json', 'w') as f:
         json.dump(settings, f, indent=4)
 
@@ -970,5 +994,4 @@ if "__main__" == __name__:
         print(f'\n--- Iteration: {i}: {time.time() - tstart} seconds ---')
 
     print_aggregated_results_rank(result, folder_results)
-    
     print('simulation finished')
