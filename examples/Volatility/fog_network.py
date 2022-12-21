@@ -421,6 +421,10 @@ def print_aggregated_results_rank(results, folder_results):
     df.to_csv(f'{folder_results}/servennode_ranks.csv')
 
 
+def print_aggregated_results_rank_blind(results, folder_results):
+    pass
+
+
 def calculate_internode_importance(G, src, dst, cutoff):
     '''
     Given a graph and endpoints, calculate the importance of each node in the network
@@ -679,7 +683,30 @@ def topo_dynamic_edges_attributes(param):
     topo_dynamic_attributes(param)
 
 
-def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topofunc, it, folder_results, folder_data, cutoff, serverprob):
+def blinding_onlyfull(param):
+    return analyze_servernodes_rank(param['sim'], param['g'], param['stats'], param['prefix'], param['cutoff'])
+
+
+def blinding_random(param):
+    result = {}
+    nsteps = math.floor(1/param['steps'])
+
+    # list of nodes that can be removed, i.e. not a source, server, or actuator
+    nodelist = list(param['sim'].topology.G.nodes)
+    sources = set()
+    servers = set()
+    actuators = set()
+    # for n in
+    for step in range(1, nsteps+1):
+        newg = param['g'].copy()
+
+        for n in round(step*param['steps']):
+            pass
+
+        result[step*param['steps']] = analyze_servernodes_rank(param['sim'], newg, param['stats'], param['prefix'], param['cutoff'])
+
+
+def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topofunc, blinding, it, folder_results, folder_data, cutoff, serverprob):
     # Topology
 
     t = Topology()
@@ -805,6 +832,7 @@ def main(stop_time, graphgen, serviceplacement, sourcedeployment, subgraph, topo
     # Correlation between server nodes and graph measures
     # Assume no knowledge of tree structure or clustering, use the original graph
 
+    ranks = blinding['f'](blinding['args'])
     return analyze_servernodes_rank(s, original_G, stats, f'{folder_results}/{it:04}', cutoff)
 
 
@@ -876,6 +904,14 @@ if "__main__" == __name__:
                                            'file': None,
                                            'filename': 'topodyn_edgeandattrib.csv'},
                                   'time': T_TOPO_CHANGE}}
+    blinding = {'fullonly': {'f': blinding_onlyfull,
+                             'name': 'No blinding',
+                             'args': {}},
+                'random': {'f': blinding_random,
+                           'name': 'Remove random nodes',
+                           'args': {'steps': .1,
+                                    'file': None,
+                                    'filename': 'blinding_random'}}}
 
     aparse = argparse.ArgumentParser(description='Create a network, test various fog network structures')
     aparse.add_argument('-r', '--results', default='results', help='Directory to store results')
@@ -891,6 +927,7 @@ if "__main__" == __name__:
     aparse.add_argument('-i', '--iterations', default=SIM_ITERS, type=int, help='Number of iterations')
     aparse.add_argument('-t', '--topofunc', choices=topofunc.keys(), default='static', type=str, help='Function for topology changes during simulation run')
     aparse.add_argument('-v', '--topoargs', help='Topography dynamics function arguments, given as json object')
+    aparse.add_argument('-x', '--blinding', choices=blinding.keys(), default='fullonly', help='Type of blinding to calculate')
     args = aparse.parse_args()
 
     sim_duration = SIM_DURATION
@@ -928,6 +965,7 @@ if "__main__" == __name__:
         print(f'            Topology dynamic  = {topofunc[args.topofunc]["name"]}, args = {topofunc[args.topofunc]["args"]}, time = {topofunc[args.topofunc]["time"]}')
     else:
         print('            Topology dynamic: = None')
+    print(f'            Blinding          = {blinding[args.blinding]["name"]}, args = {blinding[args.blinding]["args"]}')
 
     gcpy = graphgen[args.graph].copy()
     pcpy = placement.copy()
@@ -937,12 +975,14 @@ if "__main__" == __name__:
         tcpy = topofunc[args.topofunc].copy()
     else:
         tcpy = None
+    bcpy = blinding[args.blinding].copy()
 
     settings = {'graph': {args.graph: gcpy},
                 'placement': {args.placement: pcpy[args.placement]},
                 'sourcedeployment': {args.source: scpy[args.source]},
                 'subgraph': {args.subgraph: ucpy},
                 'topofunc': {args.topofunc: tcpy},
+                'blinding': {args.blinding: bcpy},
                 'datadir': args.datadir,
                 'resultdir': folder_results,
                 'cutoff': args.cutoff,
@@ -973,6 +1013,7 @@ if "__main__" == __name__:
     settings['subgraph'][args.subgraph]['f'] = str(settings['subgraph'][args.subgraph]['f'])
     if settings['topofunc'][args.topofunc]:
         settings['topofunc'][args.topofunc]['f'] = str(settings['topofunc'][args.topofunc]['f'])
+    settings['blinding'][args.blinding]['f'] = str(settings['blinding'][args.blinding]['f'])
 
     with open(f'{args.results}/settings.json', 'w') as f:
         json.dump(settings, f, indent=4)
@@ -986,6 +1027,7 @@ if "__main__" == __name__:
                            sourcedeployment[args.source],
                            subgraph[args.subgraph],
                            topofunc[args.topofunc],
+                           blinding[args.blinding],
                            i,
                            folder_results,
                            folder_data,
@@ -993,5 +1035,9 @@ if "__main__" == __name__:
                            args.serverprob))
         print(f'\n--- Iteration: {i}: {time.time() - tstart} seconds ---')
 
-    print_aggregated_results_rank(result, folder_results)
+    if args.blinding == 'fullonly':
+        print_aggregated_results_rank(results, folder_results)
+    elif args.blinding == 'random':
+        print_aggregated_results_rank_blind(results, folder_results)
+
     print('simulation finished')
